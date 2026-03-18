@@ -1,0 +1,8 @@
+{
+  "name": "claude-lens",
+  "description": "Lightweight, high-performance statusline for Claude Code. 10x faster than claude-hud with context trend prediction, cost tracking, and zero-config defaults.",
+  "version": "1.0.0",
+  "author": {
+    "name": "yuhan"
+  }
+}

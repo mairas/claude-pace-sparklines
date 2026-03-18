@@ -66,7 +66,7 @@ One-time setup (plugin skills):
 | Todo progress | Yes | Yes (incremental transcript) |
 | Worktree-aware paths | No | Yes |
 | Interactive config | Yes | Yes (plugin skills) |
-| Token output speed | Yes | Planned |
+| Token output speed | Yes | Yes (estimated from transcript) |
 
 ## Unique Advantages
 
@@ -87,7 +87,7 @@ claude-hud gained 466 stars in a single day (2026-03-18) on these tailwinds alon
 
 ## Status
 
-Early development. The core statusline script is proven (months of daily 8h+ usage). Plugin packaging and transcript-based features are in progress.
+V1 complete. All features implemented with 50 tests (unit + integration). Plugin packaging with setup and configure skills ready. Performance benchmark: p50 ~37ms.
 
 ## License
 

@@ -123,10 +123,10 @@ parse_stdin() {
       (.worktree.branch // ""),
       (.workspace.current_dir // "."),
       (.workspace.project_dir // ".")
-    ] | join("\t")
+    ] | join("\u001f")
   ' 2>/dev/null); then
-    # 解析成功，按 tab 分割赋值给各全局变量
-    IFS=$'\t' read -r \
+    # 解析成功，按 unit separator 分割赋值（不能用 tab，bash 会合并连续 tab）
+    IFS=$'\x1f' read -r \
       G_MODEL_ID G_MODEL_NAME G_CONTEXT_PCT G_CTX_SIZE \
       G_COST_USD G_DURATION_MS G_TRANSCRIPT_PATH \
       G_WORKTREE_NAME G_WORKTREE_BRANCH \
@@ -141,7 +141,7 @@ parse_stdin() {
   # jq 失败，尝试读取缓存的解析结果（最长保留 1 天）
   local cached
   if cached=$(cache_get "${CACHE_PREFIX}-last-parse" 86400 2>/dev/null); then
-    IFS=$'\t' read -r \
+    IFS=$'\x1f' read -r \
       G_MODEL_ID G_MODEL_NAME G_CONTEXT_PCT G_CTX_SIZE \
       G_COST_USD G_DURATION_MS G_TRANSCRIPT_PATH \
       G_WORKTREE_NAME G_WORKTREE_BRANCH \
@@ -473,7 +473,10 @@ transcript_read() {
   local file="${G_TRANSCRIPT_PATH:-}"
   [ -z "$file" ] || [ ! -f "$file" ] && return 1
 
-  local offset_file="${TRANSCRIPT_OFFSET_FILE:-${CACHE_PREFIX}-transcript-offset}"
+  # 用 transcript 文件路径哈希作为 offset 文件 key，隔离多 session 并发写入
+  local file_hash
+  file_hash=$(printf '%s' "$file" | md5 -q 2>/dev/null || printf '%s' "$file" | md5sum 2>/dev/null | cut -d' ' -f1)
+  local offset_file="${TRANSCRIPT_OFFSET_FILE:-${CACHE_PREFIX}-transcript-offset-${file_hash}}"
   local last_offset=0
 
   [ -f "$offset_file" ] && last_offset=$(cat "$offset_file" 2>/dev/null || echo 0)
@@ -500,7 +503,10 @@ transcript_read() {
 # 解析 transcript 增量数据，更新 _TS_* 全局状态变量
 _update_transcript_state() {
   local cache_dir="${TRANSCRIPT_CACHE_DIR:-/tmp}"
-  local state_cache="${cache_dir}/claude-lens-transcript-state"
+  # 用 transcript 路径哈希隔离不同 session 的状态缓存，避免多 session 交叉污染
+  local transcript_hash
+  transcript_hash=$(printf '%s' "${G_TRANSCRIPT_PATH:-unknown}" | md5 -q 2>/dev/null || printf '%s' "${G_TRANSCRIPT_PATH:-unknown}" | md5sum 2>/dev/null | cut -d' ' -f1)
+  local state_cache="${cache_dir}/claude-lens-transcript-state-${transcript_hash}"
 
   if cache_get "$state_cache" 2 > /dev/null 2>&1; then
     return 0
@@ -701,8 +707,9 @@ render() {
   line1=$(render_line " " "${outputs1[@]}")
   line2=$(render_line " | " "${outputs2[@]}")
 
-  echo -e "${line1} ${path_display}"
-  echo -e "${line2}"
+  # ANSI 码已由各模块 printf '%b' 展开为原始字节，用 printf '%s' 直传不再二次解释
+  printf '%s %s\n' "$line1" "$path_display"
+  printf '%s\n' "$line2"
 }
 
 # === Main ===
