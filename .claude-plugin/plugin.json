@@ -1,6 +1,6 @@
 {
   "name": "claude-lens",
-  "description": "Lightweight, high-performance statusline for Claude Code. 10x faster than claude-hud with context trend prediction, cost tracking, and zero-config defaults.",
+  "description": "Fast statusline for Claude Code with pace tracking. Shows if you're burning quota too fast (green = headroom, red = slow down). Pure Bash + jq, ~33ms, zero config.",
   "version": "0.2.0",
   "author": {
     "name": "yuhan"

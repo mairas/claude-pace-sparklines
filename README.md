@@ -1,6 +1,6 @@
 # Claude Lens
 
-> A fast, lightweight statusline for Claude Code. Pure Bash + jq.
+> Know if you're burning through your Claude Code quota too fast. Pure Bash + jq, ~33ms.
 
 ![claude-lens statusline](claude-lens-showcase.jpg)
 
@@ -20,19 +20,14 @@ Restart Claude Code. Done. If `find` returns nothing, the plugin may not be inst
 
 To remove: replace `--install` with `--uninstall`.
 
-## Features
+## What You See
 
-**Everything you need, nothing you don't:**
+- **Pace tracking** - green +N% = headroom, red -N% = slow down
+- Quota remaining (5h + 7d) with reset countdowns
+- Context bar with trend arrows
+- Git status, tools, subagents, todos
 
-- Context progress bar with color thresholds and trend arrows
-- Usage remaining (5h/7d) with reset countdowns
-- **Pace tracking** - see reserve (+N%, green) or deficit (-N%, red) vs ideal consumption pace
-- Git branch, changed files, lines added/deleted, ahead/behind
-- Active tool, subagent status, todo progress
-- Session duration, token output speed
-- Worktree-aware path display
-
-**Zero config required.** Sensible defaults out of the box.
+Zero config. One-line install.
 
 ## Configure
 
@@ -53,12 +48,12 @@ Changes take effect on the next statusline refresh (~300ms).
 
 ## vs claude-hud
 
-[claude-hud](https://github.com/jarrodwatts/claude-hud) pioneered statusline monitoring for Claude Code. claude-lens matches its features and adds pace tracking, while solving a fundamental performance problem:
+[claude-hud](https://github.com/jarrodwatts/claude-hud) pioneered statusline monitoring for Claude Code. claude-lens matches its features and adds pace tracking, with a different architectural approach:
 
 | | claude-hud | claude-lens |
 |--|-----------|-------------|
-| Runtime | Node.js (cold start every 300ms) | Bash + jq |
-| Invocation | 150-300ms | ~50ms |
+| Runtime | Node.js | Bash + jq |
+| Invocation | ~70ms | ~33ms |
 | Transcript | Full scan O(n) - degrades over time | Incremental O(1) - constant |
 | Caching | In-memory (lost on restart) | File-based (survives restarts) |
 | Usage API | Blocks on cache miss | Async background refresh |
