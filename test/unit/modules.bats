@@ -353,34 +353,3 @@ strip_ansi() {
   run format_path "/very/long/path/that/goes/on/and/on/and/on/and/on/forever/project"
   [ "${#output}" -le 46 ]
 }
-
-# --- render_line ---
-
-@test "render_line joins module outputs with separator" {
-  run render_line " | " "hello" "world" "test"
-  [[ "$output" == "hello | world | test" ]]
-}
-
-@test "render_line skips empty module outputs" {
-  run render_line " | " "hello" "" "test"
-  [[ "$output" == "hello | test" ]]
-}
-
-# --- get_preset_modules ---
-
-@test "get_preset_modules returns modules for standard line1" {
-  CFG_PRESET="standard"
-  run get_preset_modules "line1"
-  [[ "$output" == *"model"* ]]
-  [[ "$output" == *"context"* ]]
-  [[ "$output" == *"trend"* ]]
-  [[ "$output" == *"duration"* ]]
-}
-
-@test "get_preset_modules returns modules for minimal line1" {
-  CFG_PRESET="minimal"
-  run get_preset_modules "line1"
-  [[ "$output" == *"model"* ]]
-  [[ "$output" == *"context"* ]]
-  [[ "$output" != *"trend"* ]]
-}

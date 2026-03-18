@@ -6,7 +6,7 @@
 # Must complete within ~35ms. All modules are inline functions.
 
 # === Constants ===
-readonly VERSION="0.2.0"
+readonly VERSION="0.2.1"
 readonly CACHE_PREFIX="/tmp/claude-lens"
 
 # ANSI colors
@@ -20,12 +20,10 @@ readonly C_RESET='\033[0m'
 
 # === Cache Helpers ===
 
-# 获取文件修改时间（epoch 秒），兼容 macOS/Linux
 _file_mtime() {
   stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
 }
 
-# 返回文件距今秒数；文件不存在时返回大数并 exit 1
 file_age() {
   local file="$1"
   if [ ! -f "$file" ]; then
@@ -33,12 +31,11 @@ file_age() {
     return 1
   fi
   local now mtime
-  now=$(date +%s)
+  now="${_NOW:-$(date +%s)}"
   mtime=$(_file_mtime "$file")
   echo $((now - mtime))
 }
 
-# 读取缓存文件，若存在且在 TTL 内则输出内容并 exit 0，否则 exit 1
 cache_get() {
   local file="$1" ttl="$2"
   if [ -f "$file" ]; then
@@ -52,7 +49,6 @@ cache_get() {
   return 1
 }
 
-# 原子写入缓存：先写临时文件再 mv，避免并发读到半写内容
 cache_set() {
   local file="$1" data="$2"
   local tmp
@@ -60,20 +56,21 @@ cache_set() {
   printf '%s' "$data" > "$tmp" && mv "$tmp" "$file"
 }
 
+# Cross-platform md5: macOS `md5 -q`, Linux `md5sum`
+_hash_str() {
+  printf '%s' "$1" | md5 -q 2>/dev/null || printf '%s' "$1" | md5sum 2>/dev/null | cut -d' ' -f1
+}
+
 # === Config ===
 
-# 写入默认配置值（所有 CFG_ 变量）
 _config_defaults() {
-  CFG_PRESET="standard"
   CFG_SHOW_COST="false"
   CFG_SHOW_SPEED="true"
   CFG_SHOW_TREND="true"
   CFG_SHOW_USAGE="true"
 }
 
-# 从文件加载配置，严格白名单验证，禁止 eval/source
-# Key: 仅大写字母和下划线 ([A-Z_]+)
-# Value: 仅安全字符 ([a-zA-Z0-9_./ -]*)
+# Security: whitelist validation, no eval/source
 load_config() {
   local config_file="$1"
   _config_defaults
@@ -82,11 +79,9 @@ load_config() {
 
   local line key value
   while IFS= read -r line || [ -n "$line" ]; do
-    # 跳过注释行和空行
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ "$line" =~ ^[[:space:]]*$ ]] && continue
 
-    # 提取 key=value
     if [[ "$line" =~ ^([A-Z_]+)=(.*)$ ]]; then
       key="${BASH_REMATCH[1]}"
       value="${BASH_REMATCH[2]}"
@@ -102,9 +97,17 @@ load_config() {
 
 # === JSON Parse ===
 
-# 将 stdin JSON 用单次 jq 调用解析为全局 shell 变量。
-# 所有模块读取这些全局变量，自身不调用 jq。
-# 解析失败时尝试读取缓存的最后一次成功解析结果。
+_assign_parsed_fields() {
+  IFS=$'\x1f' read -r \
+    G_MODEL_ID G_MODEL_NAME G_CONTEXT_PCT G_CTX_SIZE \
+    G_COST_USD G_DURATION_MS G_TRANSCRIPT_PATH \
+    G_WORKTREE_NAME G_WORKTREE_BRANCH \
+    G_WORKSPACE_DIR G_PROJECT_DIR \
+    G_LINES_ADDED G_LINES_REMOVED \
+    G_INPUT_TOKENS G_OUTPUT_TOKENS G_CACHE_READ_TOKENS \
+    <<< "$1"
+}
+
 parse_stdin() {
   local raw
   raw=$(cat)
@@ -130,16 +133,7 @@ parse_stdin() {
       (.context_window.current_usage.cache_read_input_tokens // 0 | tostring)
     ] | join("\u001f")
   ' 2>/dev/null); then
-    # 解析成功，按 unit separator 分割赋值（不能用 tab，bash 会合并连续 tab）
-    IFS=$'\x1f' read -r \
-      G_MODEL_ID G_MODEL_NAME G_CONTEXT_PCT G_CTX_SIZE \
-      G_COST_USD G_DURATION_MS G_TRANSCRIPT_PATH \
-      G_WORKTREE_NAME G_WORKTREE_BRANCH \
-      G_WORKSPACE_DIR G_PROJECT_DIR \
-      G_LINES_ADDED G_LINES_REMOVED \
-      G_INPUT_TOKENS G_OUTPUT_TOKENS G_CACHE_READ_TOKENS \
-      <<< "$parsed"
-
+    _assign_parsed_fields "$parsed"
     # 缓存本次解析结果，供 jq 不可用时回退
     cache_set "${CACHE_PREFIX}-last-parse" "$parsed"
     return 0
@@ -148,18 +142,11 @@ parse_stdin() {
   # jq 失败，尝试读取缓存的解析结果（最长保留 1 天）
   local cached
   if cached=$(cache_get "${CACHE_PREFIX}-last-parse" 86400 2>/dev/null); then
-    IFS=$'\x1f' read -r \
-      G_MODEL_ID G_MODEL_NAME G_CONTEXT_PCT G_CTX_SIZE \
-      G_COST_USD G_DURATION_MS G_TRANSCRIPT_PATH \
-      G_WORKTREE_NAME G_WORKTREE_BRANCH \
-      G_WORKSPACE_DIR G_PROJECT_DIR \
-      G_LINES_ADDED G_LINES_REMOVED \
-      G_INPUT_TOKENS G_OUTPUT_TOKENS G_CACHE_READ_TOKENS \
-      <<< "$cached"
+    _assign_parsed_fields "$cached"
     return 0
   fi
 
-  # 无缓存，设置空默认值，statusline 仍可显示基本内容
+  # 无缓存，设置空默认值
   G_MODEL_ID="" G_MODEL_NAME="unknown" G_CONTEXT_PCT=""
   G_CTX_SIZE="0" G_COST_USD="" G_DURATION_MS="0"
   G_TRANSCRIPT_PATH="" G_WORKTREE_NAME="" G_WORKTREE_BRANCH=""
@@ -196,7 +183,6 @@ module_cost() {
   local cost="${G_COST_USD:-}"
   [ -z "$cost" ] && return 0
 
-  # 格式化为两位小数
   printf '%b$%s%b' "$C_DIM" "$(printf '%.2f' "$cost")" "$C_RESET"
 }
 
@@ -204,7 +190,6 @@ module_context() {
   local pct="${G_CONTEXT_PCT:-}"
   local ctx_size="${G_CTX_SIZE:-0}"
 
-  # 将 context 大小转为可读单位
   local ctx_label
   if [ "$ctx_size" -ge 1000000 ] 2>/dev/null; then
     ctx_label="$((ctx_size / 1000000))M"
@@ -214,16 +199,13 @@ module_context() {
     ctx_label="$ctx_size"
   fi
 
-  # 尚无百分比（第一次调用，API 尚未响应）
   if [ -z "$pct" ] || [ "$pct" = "null" ]; then
     printf '%s ... of %s' "░░░░░░░░░░" "$ctx_label"
     return 0
   fi
 
-  # 取整
   pct=$(printf '%.0f' "$pct" 2>/dev/null || echo 0)
 
-  # 颜色阈值：<40% 绿色，40-70% 黄色，>70% 红色
   local bar_color
   if [ "$pct" -ge 70 ]; then
     bar_color="$C_RED"
@@ -233,7 +215,6 @@ module_context() {
     bar_color="$C_GREEN"
   fi
 
-  # 构建 10 字符宽进度条
   local bar_width=10
   local filled=$((pct * bar_width / 100))
   [ "$filled" -gt "$bar_width" ] && filled="$bar_width"
@@ -261,36 +242,34 @@ module_trend() {
 
   pct=$(printf '%.0f' "$pct" 2>/dev/null || echo 0)
   local trend_file="${TREND_FILE:-${CACHE_PREFIX}-trend}"
-  local now
-  now=$(date +%s)
+  local now="${_NOW:-$(date +%s)}"
 
-  # 读取最后一条记录，判断百分比是否变化
-  local last_pct=""
+  # Read existing entries into array (no mapfile - bash 3.2 compat)
+  local -a entries=()
   if [ -f "$trend_file" ]; then
-    last_pct=$(tail -1 "$trend_file" 2>/dev/null | cut -d: -f2)
+    while IFS= read -r _line || [ -n "$_line" ]; do
+      entries+=("$_line")
+    done < "$trend_file"
   fi
 
-  # 仅在百分比变化时记录
+  local last_idx=$(( ${#entries[@]} - 1 ))
+  local last_pct=""
+  [ "$last_idx" -ge 0 ] && last_pct="${entries[$last_idx]#*:}"
+
   if [ "$pct" != "$last_pct" ]; then
-    echo "${now}:${pct}" >> "$trend_file"
-    # 超过 10 条时截断为最后 10 条（环形缓冲区）
-    if [ "$(wc -l < "$trend_file" 2>/dev/null | tr -d ' ' || echo 0)" -gt 10 ]; then
-      local tmp="${trend_file}.tmp.$$"
-      tail -10 "$trend_file" > "$tmp" && mv "$tmp" "$trend_file"
+    entries+=("${now}:${pct}")
+    # 环形缓冲区：截断到最后 10 条
+    if [ "${#entries[@]}" -gt 10 ]; then
+      entries=("${entries[@]: -10}")
     fi
+    printf '%s\n' "${entries[@]}" > "$trend_file"
   fi
 
-  # 至少需要 2 个数据点才能判断方向
-  local line_count
-  line_count=$(wc -l < "$trend_file" 2>/dev/null | tr -d ' ' || echo 0)
-  if [ "$line_count" -lt 2 ]; then
-    return 0
-  fi
+  local n=${#entries[@]}
+  [ "$n" -lt 2 ] && return 0
 
-  # 比较最早和最新数据点，判断趋势方向
-  local oldest_pct newest_pct
-  oldest_pct=$(head -1 "$trend_file" | cut -d: -f2)
-  newest_pct=$(tail -1 "$trend_file" | cut -d: -f2)
+  local oldest_pct="${entries[0]#*:}"
+  local newest_pct="${entries[$((n - 1))]#*:}"
 
   local diff=$((newest_pct - oldest_pct))
   local arrow
@@ -302,11 +281,10 @@ module_trend() {
     arrow="→"
   fi
 
-  # 若上升趋势，估算剩余轮次
   local remaining=""
-  if [ "$diff" -gt 0 ] && [ "$line_count" -ge 3 ]; then
+  if [ "$diff" -gt 0 ] && [ "${#entries[@]}" -ge 3 ]; then
     local remaining_pct=$((100 - newest_pct))
-    local avg_per_step=$((diff / (line_count - 1)))
+    local avg_per_step=$((diff / (${#entries[@]} - 1)))
     if [ "$avg_per_step" -gt 0 ]; then
       local est_steps=$((remaining_pct / avg_per_step))
       [ "$est_steps" -gt 0 ] && remaining=" ~${est_steps}r"
@@ -322,16 +300,13 @@ module_git() {
   local dir="${G_PROJECT_DIR:-.}"
   local max_branch_len=35
 
-  # 以目录路径哈希作为缓存 key，兼容 macOS/Linux
   local dir_hash
-  dir_hash=$(printf '%s' "$dir" | md5 -q 2>/dev/null || printf '%s' "$dir" | md5sum 2>/dev/null | cut -d' ' -f1)
+  dir_hash=$(_hash_str "$dir")
   local cache_dir="${GIT_CACHE_DIR:-/tmp}"
   local cache_file="${cache_dir}/claude-lens-git-${dir_hash}"
 
-  # 优先读缓存（TTL 5s）
   local cached
   if ! cached=$(cache_get "$cache_file" 5); then
-    # 缓存未命中，实际读取 git 信息
     if git -C "$dir" rev-parse --git-dir > /dev/null 2>&1; then
       local branch diff_stats files added deleted
       branch=$(git -C "$dir" --no-optional-locks branch --show-current 2>/dev/null || echo "")
@@ -339,7 +314,6 @@ module_git() {
       files=$(echo "$diff_stats" | awk 'NF{c++} END{print c+0}')
       added=$(echo "$diff_stats" | awk '{s+=$1} END{print s+0}')
       deleted=$(echo "$diff_stats" | awk '{s+=$2} END{print s+0}')
-      # 检测远端分支是否存在，有则计算 ahead/behind
       local ahead=0 behind=0
       if git -C "$dir" --no-optional-locks rev-parse --verify '@{upstream}' > /dev/null 2>&1; then
         ahead=$(git -C "$dir" --no-optional-locks rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
@@ -356,12 +330,10 @@ module_git() {
   IFS='|' read -r branch files added deleted ahead behind <<< "$cached"
   [ -z "$branch" ] && return 0
 
-  # 超长 branch 名截断并加省略号
   if [ "${#branch}" -gt "$max_branch_len" ]; then
     branch="${branch:0:$max_branch_len}…"
   fi
 
-  # 计算 ahead/behind 箭头（非零时才显示）
   local git_arrows=""
   [ "${ahead:-0}" -gt 0 ] 2>/dev/null && git_arrows="${git_arrows}↑${ahead}"
   [ "${behind:-0}" -gt 0 ] 2>/dev/null && git_arrows="${git_arrows}↓${behind}"
@@ -376,7 +348,6 @@ module_git() {
 
 # === Usage Module ===
 
-# 根据百分比返回对应颜色：>=90% 红，>=70% 黄，其余绿
 _color_for_pct() {
   local val="$1"
   if [[ "$val" =~ ^[0-9]+$ ]]; then
@@ -389,7 +360,6 @@ _color_for_pct() {
   fi
 }
 
-# 格式化百分比：纯数字加 % 后缀，非数字原样输出（如 "--"）
 _fmt_pct() {
   [[ "$1" =~ ^[0-9]+$ ]] && printf '%s%%' "$1" || printf '%s' "$1"
 }
@@ -456,7 +426,22 @@ _preserve_usage_cache_on_failure() {
   cache_set "$cache_file" "${five_h}|${seven_d}|${reset_min_5h}|${reset_min_7d}"
 }
 
-# 后台子 shell 异步拉取 usage API 数据并写缓存（stale-while-revalidate 模式）
+# ISO timestamp -> remaining minutes from now
+# W2: 去掉小数秒后缀时也丢失了时区信息，需显式指定 UTC
+_parse_reset_epoch() {
+  local reset_at="$1" now_epoch="$2"
+  [ -z "$reset_at" ] && return 0
+  local reset_ts="${reset_at%%.*}"
+  local reset_epoch
+  reset_epoch=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "$reset_ts" +%s 2>/dev/null || date -d "${reset_ts}Z" +%s 2>/dev/null || true)
+  if [ -n "$reset_epoch" ]; then
+    local mins=$(( (reset_epoch - now_epoch) / 60 ))
+    [ "$mins" -lt 0 ] && mins=0
+    printf '%s' "$mins"
+  fi
+}
+
+# stale-while-revalidate: 后台异步拉取 usage API 数据并写缓存
 _fetch_usage_bg() {
   local cache_file="$1" lock_file="$2"
   (
@@ -482,33 +467,13 @@ _fetch_usage_bg() {
       local now_epoch
       now_epoch=$(date +%s)
 
-      # 提取 5h 窗口重置时间，计算距今剩余分钟数
       local reset_at reset_minutes=""
       reset_at=$(printf '%s' "$api_resp" | jq -r '.five_hour.expires_at // .five_hour.resets_at // empty' 2>/dev/null || true)
-      if [ -n "$reset_at" ]; then
-        local reset_epoch
-        # W2: 去掉小数秒后缀时也丢失了时区信息，需显式指定 UTC
-        # macOS: TZ=UTC date -jf 强制 UTC；Linux: 附加 Z 后缀告知 date -d 为 UTC
-        local reset_ts="${reset_at%%.*}"
-        reset_epoch=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "$reset_ts" +%s 2>/dev/null || date -d "${reset_ts}Z" +%s 2>/dev/null || true)
-        if [ -n "$reset_epoch" ]; then
-          reset_minutes=$(( (reset_epoch - now_epoch) / 60 ))
-          [ "$reset_minutes" -lt 0 ] && reset_minutes=0
-        fi
-      fi
+      reset_minutes=$(_parse_reset_epoch "$reset_at" "$now_epoch")
 
-      # 提取 7d 窗口重置时间，供 pace 计算复用
       local reset_at_7d reset_minutes_7d=""
       reset_at_7d=$(printf '%s' "$api_resp" | jq -r '.seven_day.resets_at // .seven_day.expires_at // empty' 2>/dev/null || true)
-      if [ -n "$reset_at_7d" ]; then
-        local reset_ts_7d="${reset_at_7d%%.*}"
-        local reset_epoch_7d
-        reset_epoch_7d=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "$reset_ts_7d" +%s 2>/dev/null || date -d "${reset_ts_7d}Z" +%s 2>/dev/null || true)
-        if [ -n "$reset_epoch_7d" ]; then
-          reset_minutes_7d=$(( (reset_epoch_7d - now_epoch) / 60 ))
-          [ "$reset_minutes_7d" -lt 0 ] && reset_minutes_7d=0
-        fi
-      fi
+      reset_minutes_7d=$(_parse_reset_epoch "$reset_at_7d" "$now_epoch")
 
       [ -n "$five_h" ] && [ -n "$seven_d" ] && result="${five_h}|${seven_d}|${reset_minutes}|${reset_minutes_7d}"
     fi
@@ -557,7 +522,6 @@ module_usage() {
   reset_min_5h=$(_age_usage_reset_min "$reset_min_5h" "$cache_age")
   reset_min_7d=$(_age_usage_reset_min "$reset_min_7d" "$cache_age")
 
-  # 将 reset_min 格式化为可读字符串
   local reset_str_5h="" reset_str_7d=""
   if [ -n "$reset_min_5h" ] && [[ "$reset_min_5h" =~ ^[0-9]+$ ]]; then
     if [ "$reset_min_5h" -ge 60 ]; then
@@ -607,10 +571,9 @@ format_path() {
   local max_len=45
   local max_wt_len=35
 
-  # 将 $HOME 前缀替换为 ~（不用 \~ 以免产生字面反斜杠）
+  # 不用 \~ 以免产生字面反斜杠
   local short="${dir/#$HOME/~}"
 
-  # 检测 worktree 路径模式：.claude/worktrees/<name>
   if [[ "$short" =~ /([^/]+)/\.claude/worktrees/([^/]+) ]]; then
     local project="${BASH_REMATCH[1]}"
     local wt_name="${BASH_REMATCH[2]}"
@@ -621,7 +584,6 @@ format_path() {
     return 0
   fi
 
-  # 普通路径超长时从末尾截断
   if [ "${#short}" -gt "$max_len" ]; then
     short="…${short: -$((max_len - 1))}"
   fi
@@ -638,14 +600,14 @@ transcript_read() {
 
   # 用 transcript 文件路径哈希作为 offset 文件 key，隔离多 session 并发写入
   local file_hash
-  file_hash=$(printf '%s' "$file" | md5 -q 2>/dev/null || printf '%s' "$file" | md5sum 2>/dev/null | cut -d' ' -f1)
+  file_hash=$(_hash_str "$file")
   local offset_file="${TRANSCRIPT_OFFSET_FILE:-${CACHE_PREFIX}-transcript-offset-${file_hash}}"
   local last_offset=0
 
   [ -f "$offset_file" ] && last_offset=$(cat "$offset_file" 2>/dev/null || echo 0)
 
   local file_size
-  file_size=$(wc -c < "$file" 2>/dev/null | tr -d ' ' || echo 0)
+  file_size=$(( $(wc -c < "$file" 2>/dev/null || echo 0) ))
 
   # 文件被截断说明是新 session，重置偏移
   if [ "$last_offset" -gt "$file_size" ]; then
@@ -668,7 +630,7 @@ _update_transcript_state() {
   local cache_dir="${TRANSCRIPT_CACHE_DIR:-/tmp}"
   # 用 transcript 路径哈希隔离不同 session 的状态缓存，避免多 session 交叉污染
   local transcript_hash
-  transcript_hash=$(printf '%s' "${G_TRANSCRIPT_PATH:-unknown}" | md5 -q 2>/dev/null || printf '%s' "${G_TRANSCRIPT_PATH:-unknown}" | md5sum 2>/dev/null | cut -d' ' -f1)
+  transcript_hash=$(_hash_str "${G_TRANSCRIPT_PATH:-unknown}")
   local state_cache="${cache_dir}/claude-lens-transcript-state-${transcript_hash}"
 
   if cache_get "$state_cache" 2 > /dev/null 2>&1; then
@@ -681,12 +643,10 @@ _update_transcript_state() {
   if [ -n "$new_data" ]; then
     local tools="" agents="" todos_done="0" todos_total="0" last_msg_len="0"
 
-    # 提取最后一条包含 tool_calls 的行
     local last_tools tool_file=""
     last_tools=$(printf '%s' "$new_data" | grep -o '"tool_calls":\[[^]]*\]' | tail -1 || true)
     if [ -n "$last_tools" ]; then
       tools=$(printf '%s' "$last_tools" | grep -o '"name":"[^"]*"' | grep -o '[^"]*"$' | tr -d '"' | head -3 | tr '\n' ',' | sed 's/,$//')
-      # 提取最近工具操作的文件路径(取 basename)
       local raw_path
       raw_path=$(printf '%s' "$new_data" | grep -o '"file_path":"[^"]*"' | tail -1 | sed 's/"file_path":"//;s/"//' || true)
       [ -n "$raw_path" ] && tool_file="${raw_path##*/}"
@@ -708,8 +668,8 @@ _update_transcript_state() {
     local last_todos todo_content=""
     last_todos=$(printf '%s' "$new_data" | grep -o '"todos":\[[^]]*\]' | tail -1 || true)
     if [ -n "$last_todos" ]; then
-      todos_total=$(printf '%s' "$last_todos" | grep -o '"status"' | wc -l | tr -d ' ')
-      todos_done=$(printf '%s' "$last_todos" | grep -o '"completed"' | wc -l | tr -d ' ')
+      todos_total=$(( $(printf '%s' "$last_todos" | grep -o '"status"' | wc -l) ))
+      todos_done=$(( $(printf '%s' "$last_todos" | grep -o '"completed"' | wc -l) ))
     fi
 
     # 最后一条消息长度，用于估算 token 速率
@@ -744,13 +704,13 @@ _update_transcript_state() {
 }
 
 module_tools() {
-  _update_transcript_state
   local tools="${_TS_TOOLS:-}"
   [ -z "$tools" ] && return 0
 
-  local count first_tool
-  count=$(echo "$tools" | tr ',' '\n' | wc -l | tr -d ' ')
-  first_tool=$(echo "$tools" | cut -d',' -f1)
+  local -a _arr
+  IFS=',' read -ra _arr <<< "$tools"
+  local count=${#_arr[@]}
+  local first_tool="${_arr[0]}"
 
   # 显示工具名 + 文件名(如果有)
   local file_info=""
@@ -764,13 +724,13 @@ module_tools() {
 }
 
 module_agents() {
-  _update_transcript_state
   local agents="${_TS_AGENTS:-}"
   [ -z "$agents" ] && return 0
 
-  local count first_agent
-  count=$(echo "$agents" | tr ',' '\n' | wc -l | tr -d ' ')
-  first_agent=$(echo "$agents" | cut -d',' -f1)
+  local -a _arr
+  IFS=',' read -ra _arr <<< "$agents"
+  local count=${#_arr[@]}
+  local first_agent="${_arr[0]}"
 
   # 状态图标：running = ◐, completed = ✓
   local status="${_TS_AGENT_STATUS:-running}"
@@ -793,7 +753,6 @@ module_agents() {
 }
 
 module_todos() {
-  _update_transcript_state
   local done="${_TS_TODOS_DONE:-0}"
   local total="${_TS_TODOS_TOTAL:-0}"
 
@@ -811,7 +770,6 @@ module_todos() {
 }
 
 module_speed() {
-  _update_transcript_state
   local msg_len="${_TS_LAST_MSG_LEN:-0}"
   [ "$msg_len" -lt 10 ] 2>/dev/null && return 0
 
@@ -821,62 +779,11 @@ module_speed() {
 
 # === Render ===
 
-# 将多个模块输出用分隔符拼接，跳过空值
-render_line() {
-  local sep="$1"
-  shift
-  local result="" first=true
-  for segment in "$@"; do
-    [ -z "$segment" ] && continue
-    if $first; then
-      result="$segment"
-      first=false
-    else
-      result="${result}${sep}${segment}"
-    fi
-  done
-  printf '%s' "$result"
-}
-
-# 根据 preset 和行号返回模块列表（供未来扩展使用，render() 现在直接调用模块）
-get_preset_modules() {
-  local line="$1"
-  local preset="${CFG_PRESET:-standard}"
-
-  case "${preset}:${line}" in
-    minimal:line1) echo "model duration" ;;
-    minimal:line2) echo "context" ;;
-    standard:line1) echo "model duration" ;;
-    standard:line2) echo "context usage" ;;
-    full:line1) echo "model duration" ;;
-    full:line2) echo "context usage cost speed" ;;
-    *) echo "model duration" ;;
-  esac
-}
-
-# 按名称执行模块并捕获输出
-run_module() {
-  local name="$1"
-  case "$name" in
-    model)    module_model ;;
-    context)  module_context ;;
-    trend)    module_trend ;;
-    duration) module_duration ;;
-    git)      module_git ;;
-    usage)    module_usage ;;
-    tools)    module_tools ;;
-    agents)   module_agents ;;
-    todos)    module_todos ;;
-    cost)     module_cost ;;
-    speed)    module_speed ;;
-    *)        return 0 ;;
-  esac
-}
-
 # 渲染完整两行 statusline
 # Line 1: [model] path │ git │ duration  (身份行)
 # Line 2: context+trend │ usage │ cost │ ...  (指标行)
 render() {
+  _update_transcript_state 2>/dev/null || true
   local sep=" │ "
 
   # --- Line 1 ---
@@ -973,6 +880,7 @@ _benchmark() {
 
 # 执行一次 statusline 渲染（benchmark 和正常模式共用）
 _run_once() {
+  _NOW=$(date +%s)
   local config_file="${CLAUDE_PLUGIN_DATA:-}/config"
   [ ! -f "$config_file" ] && config_file="${HOME}/.config/claude-lens/config"
   load_config "$config_file"
