@@ -158,7 +158,8 @@ setup() {
   G_PROJECT_DIR="/tmp/test-project"
   local hash
   hash=$(printf '%s' "/tmp/test-project" | md5 -q 2>/dev/null || printf '%s' "/tmp/test-project" | md5sum 2>/dev/null | cut -d' ' -f1)
-  echo "main|3|45|12" > "$TEST_CACHE_DIR/claude-lens-git-${hash}"
+  # 新格式：branch|files|added|deleted|ahead|behind（6 字段）
+  echo "main|3|45|12|0|0" > "$TEST_CACHE_DIR/claude-lens-git-${hash}"
   run module_git
   [[ "$output" == *"main"* ]]
   [[ "$output" == *"3f"* ]]

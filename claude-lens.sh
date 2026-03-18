@@ -122,7 +122,12 @@ parse_stdin() {
       (.worktree.name // ""),
       (.worktree.branch // ""),
       (.workspace.current_dir // "."),
-      (.workspace.project_dir // ".")
+      (.workspace.project_dir // "."),
+      (.cost.total_lines_added // "" | tostring),
+      (.cost.total_lines_removed // "" | tostring),
+      (.context_window.current_usage.input_tokens // 0 | tostring),
+      (.context_window.current_usage.output_tokens // 0 | tostring),
+      (.context_window.current_usage.cache_read_input_tokens // 0 | tostring)
     ] | join("\u001f")
   ' 2>/dev/null); then
     # 解析成功，按 unit separator 分割赋值（不能用 tab，bash 会合并连续 tab）
@@ -131,6 +136,8 @@ parse_stdin() {
       G_COST_USD G_DURATION_MS G_TRANSCRIPT_PATH \
       G_WORKTREE_NAME G_WORKTREE_BRANCH \
       G_WORKSPACE_DIR G_PROJECT_DIR \
+      G_LINES_ADDED G_LINES_REMOVED \
+      G_INPUT_TOKENS G_OUTPUT_TOKENS G_CACHE_READ_TOKENS \
       <<< "$parsed"
 
     # 缓存本次解析结果，供 jq 不可用时回退
@@ -146,6 +153,8 @@ parse_stdin() {
       G_COST_USD G_DURATION_MS G_TRANSCRIPT_PATH \
       G_WORKTREE_NAME G_WORKTREE_BRANCH \
       G_WORKSPACE_DIR G_PROJECT_DIR \
+      G_LINES_ADDED G_LINES_REMOVED \
+      G_INPUT_TOKENS G_OUTPUT_TOKENS G_CACHE_READ_TOKENS \
       <<< "$cached"
     return 0
   fi
@@ -155,6 +164,8 @@ parse_stdin() {
   G_CTX_SIZE="0" G_COST_USD="" G_DURATION_MS="0"
   G_TRANSCRIPT_PATH="" G_WORKTREE_NAME="" G_WORKTREE_BRANCH=""
   G_WORKSPACE_DIR="." G_PROJECT_DIR="."
+  G_LINES_ADDED="" G_LINES_REMOVED=""
+  G_INPUT_TOKENS="0" G_OUTPUT_TOKENS="0" G_CACHE_READ_TOKENS="0"
   return 1
 }
 
@@ -233,6 +244,14 @@ module_context() {
   [ "$empty" -gt 0 ] && bar="${bar}$(printf "%${empty}s" | tr ' ' '░')"
 
   printf '%b%s%b %d%% of %s' "$bar_color" "$bar" "$C_RESET" "$pct" "$ctx_label"
+
+  # 85%+ 时显示 input/output token 明细
+  if [ "$pct" -ge 85 ] 2>/dev/null; then
+    local in_k out_k
+    in_k=$(( (${G_INPUT_TOKENS:-0} + ${G_CACHE_READ_TOKENS:-0}) / 1000 ))
+    out_k=$(( ${G_OUTPUT_TOKENS:-0} / 1000 ))
+    printf ' %b(in:%dk out:%dk)%b' "$C_DIM" "$in_k" "$out_k" "$C_RESET"
+  fi
 }
 
 # 使用环形缓冲区（最多 10 条）追踪 context 使用趋势
@@ -320,15 +339,21 @@ module_git() {
       files=$(echo "$diff_stats" | awk 'NF{c++} END{print c+0}')
       added=$(echo "$diff_stats" | awk '{s+=$1} END{print s+0}')
       deleted=$(echo "$diff_stats" | awk '{s+=$2} END{print s+0}')
-      cached="${branch}|${files}|${added}|${deleted}"
+      # 检测远端分支是否存在，有则计算 ahead/behind
+      local ahead=0 behind=0
+      if git -C "$dir" --no-optional-locks rev-parse --verify '@{upstream}' > /dev/null 2>&1; then
+        ahead=$(git -C "$dir" --no-optional-locks rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
+        behind=$(git -C "$dir" --no-optional-locks rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
+      fi
+      cached="${branch}|${files}|${added}|${deleted}|${ahead}|${behind}"
       cache_set "$cache_file" "$cached"
     else
       return 0
     fi
   fi
 
-  local branch files added deleted
-  IFS='|' read -r branch files added deleted <<< "$cached"
+  local branch files added deleted ahead behind
+  IFS='|' read -r branch files added deleted ahead behind <<< "$cached"
   [ -z "$branch" ] && return 0
 
   # 超长 branch 名截断并加省略号
@@ -336,12 +361,17 @@ module_git() {
     branch="${branch:0:$max_branch_len}…"
   fi
 
+  # 计算 ahead/behind 箭头（非零时才显示）
+  local git_arrows=""
+  [ "${ahead:-0}" -gt 0 ] 2>/dev/null && git_arrows="${git_arrows}↑${ahead}"
+  [ "${behind:-0}" -gt 0 ] 2>/dev/null && git_arrows="${git_arrows}↓${behind}"
+
   local git_status=""
   if [ "${files:-0}" -gt 0 ] 2>/dev/null; then
     git_status=" ${files}f ${C_GREEN}+${added}${C_RESET} ${C_RED}-${deleted}${C_RESET}"
   fi
 
-  printf '%s%s' "$branch" "$git_status"
+  printf '%s%s%s' "$branch" "${git_arrows:+ $git_arrows}" "$git_status"
 }
 
 # === Usage Module ===
@@ -387,7 +417,23 @@ _fetch_usage_bg() {
       five_h=$(printf '%s' "$api_resp" | jq -r '.five_hour.utilization // empty' 2>/dev/null | cut -d. -f1)
       seven_d=$(printf '%s' "$api_resp" | jq -r '.seven_day.utilization // empty' 2>/dev/null | cut -d. -f1)
 
-      [ -n "$five_h" ] && [ -n "$seven_d" ] && result="${five_h}|${seven_d}"
+      # 提取 5h 窗口重置时间，计算距今剩余分钟数
+      local reset_at reset_minutes=""
+      reset_at=$(printf '%s' "$api_resp" | jq -r '.five_hour.expires_at // empty' 2>/dev/null || true)
+      if [ -n "$reset_at" ]; then
+        local reset_epoch now_epoch
+        # W2: 去掉小数秒后缀时也丢失了时区信息，需显式指定 UTC
+        # macOS: TZ=UTC date -jf 强制 UTC；Linux: 附加 Z 后缀告知 date -d 为 UTC
+        local reset_ts="${reset_at%%.*}"
+        reset_epoch=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "$reset_ts" +%s 2>/dev/null || date -d "${reset_ts}Z" +%s 2>/dev/null || true)
+        now_epoch=$(date +%s)
+        if [ -n "$reset_epoch" ]; then
+          reset_minutes=$(( (reset_epoch - now_epoch) / 60 ))
+          [ "$reset_minutes" -lt 0 ] && reset_minutes=0
+        fi
+      fi
+
+      [ -n "$five_h" ] && [ -n "$seven_d" ] && result="${five_h}|${seven_d}|${reset_minutes}"
     fi
 
     if [ -n "$result" ]; then
@@ -418,19 +464,29 @@ module_usage() {
   fi
 
   # 从缓存读取（可能是过期数据，stale-while-revalidate）
-  local five_h="--" seven_d="--"
+  local five_h="--" seven_d="--" reset_min=""
   if [ -f "$cache_file" ]; then
-    IFS='|' read -r five_h seven_d < "$cache_file" 2>/dev/null || true
+    IFS='|' read -r five_h seven_d reset_min < "$cache_file" 2>/dev/null || true
   fi
   five_h="${five_h:---}"
   seven_d="${seven_d:---}"
+
+  # 将 reset_min 格式化为可读字符串（如 "1h 30m" 或 "45m"）
+  local reset_str=""
+  if [ -n "$reset_min" ] && [[ "$reset_min" =~ ^[0-9]+$ ]]; then
+    if [ "$reset_min" -ge 60 ]; then
+      reset_str=" ($((reset_min / 60))h $((reset_min % 60))m)"
+    else
+      reset_str=" (${reset_min}m)"
+    fi
+  fi
 
   local five_h_color seven_d_color
   five_h_color=$(_color_for_pct "$five_h")
   seven_d_color=$(_color_for_pct "$seven_d")
 
-  printf '5h: %b%s%b | 7d: %b%s%b' \
-    "$five_h_color" "$(_fmt_pct "$five_h")" "$C_RESET" \
+  printf '5h: %b%s%b%s │ 7d: %b%s%b' \
+    "$five_h_color" "$(_fmt_pct "$five_h")" "$C_RESET" "$reset_str" \
     "$seven_d_color" "$(_fmt_pct "$seven_d")" "$C_RESET"
 }
 
@@ -519,21 +575,30 @@ _update_transcript_state() {
     local tools="" agents="" todos_done="0" todos_total="0" last_msg_len="0"
 
     # 提取最后一条包含 tool_calls 的行
-    local last_tools
+    local last_tools tool_file=""
     last_tools=$(printf '%s' "$new_data" | grep -o '"tool_calls":\[[^]]*\]' | tail -1 || true)
     if [ -n "$last_tools" ]; then
       tools=$(printf '%s' "$last_tools" | grep -o '"name":"[^"]*"' | grep -o '[^"]*"$' | tr -d '"' | head -3 | tr '\n' ',' | sed 's/,$//')
+      # 提取最近工具操作的文件路径(取 basename)
+      local raw_path
+      raw_path=$(printf '%s' "$new_data" | grep -o '"file_path":"[^"]*"' | tail -1 | sed 's/"file_path":"//;s/"//' || true)
+      [ -n "$raw_path" ] && tool_file="${raw_path##*/}"
     fi
 
     # 提取最后一条包含 subagents 的行
-    local last_agents
+    local last_agents agent_model="" agent_status=""
     last_agents=$(printf '%s' "$new_data" | grep -o '"subagents":\[[^]]*\]' | tail -1 || true)
     if [ -n "$last_agents" ]; then
       agents=$(printf '%s' "$last_agents" | grep -o '"name":"[^"]*"' | grep -o '[^"]*"$' | tr -d '"' | head -3 | tr '\n' ',' | sed 's/,$//')
+      # S1: 取第一个 agent 的 model/status，与显示的 name 对齐（tail-1 会错配多 agent 场景）
+      agent_model=$(printf '%s' "$last_agents" | grep -o '"model":"[^"]*"' | head -1 | sed 's/"model":"//;s/"//' || true)
+      agent_status=$(printf '%s' "$last_agents" | grep -o '"status":"[^"]*"' | head -1 | sed 's/"status":"//;s/"//' || true)
     fi
 
     # 提取最后一条包含 todos 的行
-    local last_todos
+    # S2: todo_content 靠 grep 无法可靠定位 in-progress 项（status 和 content 是独立字段），
+    #     改为只显示计数，todo_content 保留为空以维持缓存格式兼容
+    local last_todos todo_content=""
     last_todos=$(printf '%s' "$new_data" | grep -o '"todos":\[[^]]*\]' | tail -1 || true)
     if [ -n "$last_todos" ]; then
       todos_total=$(printf '%s' "$last_todos" | grep -o '"status"' | wc -l | tr -d ' ')
@@ -547,18 +612,26 @@ _update_transcript_state() {
       last_msg_len=${#last_msg}
     fi
 
+    # W1: 净化可能含 | 的字段（缓存分隔符），防止读回时字段错位
+    tool_file=$(printf '%s' "$tool_file" | tr '|' ' ')
+    agent_model=$(printf '%s' "$agent_model" | tr '|' ' ')
+
     _TS_TOOLS="$tools"
+    _TS_TOOL_FILE="$tool_file"
     _TS_AGENTS="$agents"
+    _TS_AGENT_MODEL="$agent_model"
+    _TS_AGENT_STATUS="$agent_status"
     _TS_TODOS_DONE="$todos_done"
     _TS_TODOS_TOTAL="$todos_total"
+    _TS_TODO_CONTENT="$todo_content"
     _TS_LAST_MSG_LEN="$last_msg_len"
 
-    cache_set "$state_cache" "${_TS_TOOLS}|${_TS_AGENTS}|${_TS_TODOS_DONE}|${_TS_TODOS_TOTAL}|${_TS_LAST_MSG_LEN}"
+    cache_set "$state_cache" "${_TS_TOOLS}|${_TS_TOOL_FILE}|${_TS_AGENTS}|${_TS_AGENT_MODEL}|${_TS_AGENT_STATUS}|${_TS_TODOS_DONE}|${_TS_TODOS_TOTAL}|${_TS_TODO_CONTENT}|${_TS_LAST_MSG_LEN}"
   fi
 
   # 从缓存加载（包含刚才写入的，或上次的 stale 值）
   if [ -f "$state_cache" ]; then
-    IFS='|' read -r _TS_TOOLS _TS_AGENTS _TS_TODOS_DONE _TS_TODOS_TOTAL _TS_LAST_MSG_LEN \
+    IFS='|' read -r _TS_TOOLS _TS_TOOL_FILE _TS_AGENTS _TS_AGENT_MODEL _TS_AGENT_STATUS _TS_TODOS_DONE _TS_TODOS_TOTAL _TS_TODO_CONTENT _TS_LAST_MSG_LEN \
       < "$state_cache" 2>/dev/null || true
   fi
 }
@@ -572,10 +645,14 @@ module_tools() {
   count=$(echo "$tools" | tr ',' '\n' | wc -l | tr -d ' ')
   first_tool=$(echo "$tools" | cut -d',' -f1)
 
+  # 显示工具名 + 文件名(如果有)
+  local file_info=""
+  [ -n "${_TS_TOOL_FILE:-}" ] && file_info=": ${_TS_TOOL_FILE}"
+
   if [ "$count" -gt 1 ]; then
-    printf '⚙ %s(+%d)' "$first_tool" "$((count - 1))"
+    printf '⚙ %s%s(+%d)' "$first_tool" "$file_info" "$((count - 1))"
   else
-    printf '⚙ %s' "$first_tool"
+    printf '⚙ %s%s' "$first_tool" "$file_info"
   fi
 }
 
@@ -588,10 +665,23 @@ module_agents() {
   count=$(echo "$agents" | tr ',' '\n' | wc -l | tr -d ' ')
   first_agent=$(echo "$agents" | cut -d',' -f1)
 
-  if [ "$count" -gt 1 ]; then
-    printf '⊕ %s(+%d)' "$first_agent" "$((count - 1))"
+  # 状态图标：running = ◐, completed = ✓
+  local status="${_TS_AGENT_STATUS:-running}"
+  local icon
+  if [ "$status" = "completed" ] || [ "$status" = "done" ]; then
+    icon="${C_GREEN}✓${C_RESET}"
   else
-    printf '⊕ %s' "$first_agent"
+    icon="${C_YELLOW}◐${C_RESET}"
+  fi
+
+  # 模型名(如果有)
+  local model_info=""
+  [ -n "${_TS_AGENT_MODEL:-}" ] && model_info=" ${C_DIM}[${_TS_AGENT_MODEL}]${C_RESET}"
+
+  if [ "$count" -gt 1 ]; then
+    printf '%b %s%b(+%d)' "$icon" "$first_agent" "$model_info" "$((count - 1))"
+  else
+    printf '%b %s%b' "$icon" "$first_agent" "$model_info"
   fi
 }
 
@@ -602,7 +692,15 @@ module_todos() {
 
   [ "$total" -eq 0 ] 2>/dev/null && return 0
 
-  printf '☑ %d/%d' "$done" "$total"
+  # 全部完成用绿色 ✓，否则用黄色 ▸；S2: 不再显示 todo 文本，只显示计数
+  local icon
+  if [ "$done" -eq "$total" ] 2>/dev/null; then
+    icon="${C_GREEN}✓${C_RESET}"
+  else
+    icon="${C_YELLOW}▸${C_RESET}"
+  fi
+
+  printf '%b %d/%d' "$icon" "$done" "$total"
 }
 
 module_speed() {
@@ -633,19 +731,19 @@ render_line() {
   printf '%s' "$result"
 }
 
-# 根据 preset 和行号返回模块列表
+# 根据 preset 和行号返回模块列表（供未来扩展使用，render() 现在直接调用模块）
 get_preset_modules() {
   local line="$1"
   local preset="${CFG_PRESET:-standard}"
 
   case "${preset}:${line}" in
-    minimal:line1) echo "model context duration" ;;
-    minimal:line2) echo "git" ;;
-    standard:line1) echo "model context trend duration" ;;
-    standard:line2) echo "git tools agents todos usage" ;;
-    full:line1) echo "model context trend duration" ;;
-    full:line2) echo "git tools agents todos cost speed usage" ;;
-    *) echo "model context duration" ;;
+    minimal:line1) echo "model duration" ;;
+    minimal:line2) echo "context" ;;
+    standard:line1) echo "model duration" ;;
+    standard:line2) echo "context usage" ;;
+    full:line1) echo "model duration" ;;
+    full:line2) echo "context usage cost speed" ;;
+    *) echo "model duration" ;;
   esac
 }
 
@@ -669,46 +767,52 @@ run_module() {
 }
 
 # 渲染完整两行 statusline
+# Line 1: [model] path │ git │ duration  (身份行)
+# Line 2: context+trend │ usage │ cost │ ...  (指标行)
 render() {
-  local line1_modules line2_modules
-  line1_modules=$(get_preset_modules "line1")
-  line2_modules=$(get_preset_modules "line2")
+  local sep=" │ "
 
-  # 路径显示
-  local path_display
-  path_display=$(format_path "${G_PROJECT_DIR:-.}")
+  # --- Line 1 ---
+  local model_out path_out git_out duration_out
+  model_out=$(module_model 2>/dev/null || true)
+  path_out=$(format_path "${G_PROJECT_DIR:-.}")
+  git_out=$(module_git 2>/dev/null || true)
+  duration_out=$(module_duration 2>/dev/null || true)
 
-  # 收集第一行各模块输出
-  local outputs1=()
-  for mod in $line1_modules; do
-    case "$mod" in
-      trend) [ "${CFG_SHOW_TREND:-true}" = "false" ] && continue ;;
-      cost)  [ "${CFG_SHOW_COST:-false}" != "true" ] && continue ;;
-      speed) [ "${CFG_SHOW_SPEED:-true}" = "false" ] && continue ;;
-      usage) [ "${CFG_SHOW_USAGE:-true}" = "false" ] && continue ;;
-    esac
-    outputs1+=("$(run_module "$mod" 2>/dev/null || true)")
+  # 拼接 line 1：model + path，再可选追加 git 和 duration
+  local line1="${model_out} ${path_out}"
+  [ -n "$git_out" ] && line1="${line1}${sep}${git_out}"
+  [ -n "$duration_out" ] && line1="${line1}${sep}${duration_out}"
+
+  # --- Line 2 ---
+  local context_out trend_out usage_out cost_out
+  local tools_out agents_out todos_out speed_out
+
+  context_out=$(module_context 2>/dev/null || true)
+
+  # trend 直接附着在 context 输出末尾（如 "24%↓"），不用分隔符
+  trend_out=""
+  [ "${CFG_SHOW_TREND:-true}" != "false" ] && trend_out=$(module_trend 2>/dev/null || true)
+
+  [ "${CFG_SHOW_USAGE:-true}" != "false" ] && usage_out=$(module_usage 2>/dev/null || true)
+  [ "${CFG_SHOW_COST:-false}" = "true" ] && cost_out=$(module_cost 2>/dev/null || true)
+  tools_out=$(module_tools 2>/dev/null || true)
+  agents_out=$(module_agents 2>/dev/null || true)
+  todos_out=$(module_todos 2>/dev/null || true)
+  [ "${CFG_SHOW_SPEED:-true}" != "false" ] && speed_out=$(module_speed 2>/dev/null || true)
+
+  # trend 箭头紧贴 context（不插入空格或分隔符）
+  local context_with_trend="${context_out}${trend_out}"
+
+  # 将非空 segment 用 sep 串联为 line 2
+  local line2="$context_with_trend"
+  local segments=("$usage_out" "$cost_out" "$tools_out" "$agents_out" "$todos_out" "$speed_out")
+  for seg in "${segments[@]}"; do
+    [ -n "$seg" ] && line2="${line2}${sep}${seg}"
   done
-
-  # 收集第二行各模块输出
-  local outputs2=()
-  for mod in $line2_modules; do
-    case "$mod" in
-      trend) [ "${CFG_SHOW_TREND:-true}" = "false" ] && continue ;;
-      cost)  [ "${CFG_SHOW_COST:-false}" != "true" ] && continue ;;
-      speed) [ "${CFG_SHOW_SPEED:-true}" = "false" ] && continue ;;
-      usage) [ "${CFG_SHOW_USAGE:-true}" = "false" ] && continue ;;
-    esac
-    outputs2+=("$(run_module "$mod" 2>/dev/null || true)")
-  done
-
-  # 渲染两行
-  local line1 line2
-  line1=$(render_line " " "${outputs1[@]}")
-  line2=$(render_line " | " "${outputs2[@]}")
 
   # ANSI 码已由各模块 printf '%b' 展开为原始字节，用 printf '%s' 直传不再二次解释
-  printf '%s %s\n' "$line1" "$path_display"
+  printf '%s\n' "$line1"
   printf '%s\n' "$line2"
 }
 
@@ -716,8 +820,8 @@ render() {
 
 # 所有数据源失败时的兜底输出
 _fallback_output() {
-  echo -e "${C_CYAN}[claude-lens]${C_RESET} waiting for data..."
-  echo -e "░░░░░░░░░░"
+  printf '%b[claude-lens]%b waiting for data...\n' "$C_CYAN" "$C_RESET"
+  printf '%s\n' "░░░░░░░░░░"
 }
 
 # benchmark 模式：运行 N 次并报告耗时分布
