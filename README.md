@@ -2,7 +2,7 @@
 
 > Know if you're burning through your Claude Code quota too fast. Pure Bash + jq, ~33ms.
 
-![claude-lens statusline](claude-lens-showcase.jpg)
+![claude-lens statusline](.github/claude-lens-showcase.jpg)
 
 ## Install
 
