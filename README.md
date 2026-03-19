@@ -22,6 +22,7 @@ Requires `jq`.
 ```bash
 curl -o ~/.claude/statusline.sh \
   https://raw.githubusercontent.com/Astro-Han/claude-lens/main/claude-lens.sh
+chmod +x ~/.claude/statusline.sh
 
 claude config set statusLine.command ~/.claude/statusline.sh
 ```
