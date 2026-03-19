@@ -4,18 +4,17 @@ Are you burning through your Claude Code quota too fast? Or do you have more hea
 
 Other statuslines show how much you *used*. Claude Lens shows whether your *pace* is sustainable.
 
-![claude-lens statusline](.github/claude-lens-showcase.jpg)
+![claude-lens statusline](.github/claude-lens-showcase.png)
 
-**Line 1** -- Model, effort, project directory, git branch + diff stats
-**Line 2** -- Context window, quota remaining, pace, session duration
+**Line 1** -- Model, context size, effort, project directory, git branch
+**Line 2** -- Context bar, remaining quota with pace and reset countdown, session duration
 
-The key number is the pace indicator after remaining %:
+Reading the numbers:
 
-- `+23%` green = you've used 23% less than expected at this point in the window. Headroom. Keep going.
-- `-15%` red = you're 15% ahead of a linear burn. Slow down or you'll hit the wall.
-- No indicator = you're within 10% of expected pace. On track.
-
-Remaining quota is color-coded: green (>30% left), yellow (11-30%), red (<=10%).
+- **92%** remaining in the 5h window, **29%** remaining in the 7d window
+- **+17%** green = you've used 17% less than expected at this point. Headroom. Keep going.
+- **(3h)** = this window resets in 3 hours
+- Colors: green (>30% left), yellow (11-30%), red (<=10%)
 
 ## Install
 
@@ -32,7 +31,7 @@ To remove: `claude config set statusLine.command ""`
 
 ## Under the Hood
 
-144 lines of Bash. Claude Code polls the statusline every ~300ms, so speed matters:
+153 lines of Bash. Claude Code polls the statusline every ~300ms, so speed matters:
 
 | Data | Source | Cache |
 |------|--------|-------|
