@@ -88,7 +88,7 @@ _fetch_usage() {
         (if .extra_usage.is_enabled then 1 else 0 end),
         (.extra_usage.used_credits//0|floor),(.extra_usage.monthly_limit//0|floor),
         (.five_hour.resets_at|rmins//""),(.seven_day.resets_at|rmins//"")]|@tsv' \
-      <<< "$RESP" 2>/dev/null) || { [ -f "$UC" ] && touch "$UC" || echo "--|--|0|0|0||" > "$UC"; return; }
+      <<< "$RESP" 2>/dev/null) || { echo "--|--|0|0|0||" > "$UC"; return; }
     TMP=$(mktemp /tmp/claude-sl-u-XXXXXX)
     echo "${F5}|${S7}|${EX}|${EU}|${EL}|${RM5}|${RM7}" > "$TMP" && mv "$TMP" "$UC"
   ) &
