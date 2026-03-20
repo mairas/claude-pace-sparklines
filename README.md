@@ -19,6 +19,16 @@ The top line shows model, effort, context size, project directory, and git branc
 
 Requires `jq`.
 
+### Option A: Plugin (recommended)
+
+```
+/plugin marketplace add Astro-Han/claude-lens
+/plugin install claude-lens
+/claude-lens:setup
+```
+
+### Option B: Manual
+
 ```bash
 curl -o ~/.claude/statusline.sh \
   https://raw.githubusercontent.com/Astro-Han/claude-lens/main/claude-lens.sh
