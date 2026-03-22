@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Claude Code statusline plugin
 # Line1: [model effort] dir | branch Nf +A -D  |  Line2: bar PCT% | 5h remain | 7d remain | [$cost] | duration
+
+# Disable glob expansion so unquoted vars with wildcards (e.g. DIR paths)
+# are never accidentally expanded into filename lists.
 set -f
 input=$(cat)
 [ -z "$input" ] && {
@@ -12,10 +15,14 @@ command -v jq >/dev/null || {
   exit 0
 }
 
+# ── Colors & Utilities ──
 C='\033[36m' G='\033[32m' Y='\033[33m' R='\033[31m' D='\033[2m' N='\033[0m'
 NOW=$(date +%s)
+# Returns true (exit 0) when file is missing or older than $2 seconds.
 _stale() { [ ! -f "$1" ] || [ $((NOW - $(stat -f%m "$1" 2>/dev/null || stat -c%Y "$1" 2>/dev/null || echo 0))) -gt "$2" ]; }
 
+# ── Parse stdin + settings in one jq call ──
+# Fields: MODEL DIR PCT CTX DUR COST EFF HAS_RL U5 U7 R5 R7
 HAS_RL=0
 IFS=$'\t' read -r MODEL DIR PCT CTX DUR COST EFF HAS_RL U5 U7 R5 R7 < <(
   jq -r --slurpfile cfg <(cat ~/.claude/settings.json 2>/dev/null || echo '{}') \
@@ -31,6 +38,7 @@ IFS=$'\t' read -r MODEL DIR PCT CTX DUR COST EFF HAS_RL U5 U7 R5 R7 < <(
 )
 case "${EFF:-default}" in high) EF='●' ;; low) EF='◔' ;; *) EF='◑' ;; esac
 
+# ── Progress Bar ──
 F=$((PCT / 10))
 ((F < 0)) && F=0
 ((F > 10)) && F=10
@@ -40,18 +48,23 @@ for ((i = 0; i < F; i++)); do BAR+='█'; done
 for ((i = F; i < 10; i++)); do BAR+='░'; done
 ((CTX >= 1000000)) && CL="$((CTX / 1000000))M" || CL="$((CTX / 1000))K"
 
+# ── Duration Formatting ──
 if ((DUR >= 3600000)); then
   DS="$((DUR / 3600000))h$((DUR / 60000 % 60))m"
 elif ((DUR >= 60000)); then
   DS="$((DUR / 60000))m$((DUR / 1000 % 60))s"
 else DS="$((DUR / 1000))s"; fi
 
+# ── Git Info (5s cache, atomic write) ──
+# Cache key encodes DIR so concurrent sessions in different repos don't clash.
+# Atomic write: write to a temp file first, then mv to avoid partial reads.
 GC="/tmp/claude-sl-git-${DIR//[^a-zA-Z0-9]/_}"
 if _stale "$GC" 5; then
   if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
     _BR=$(git -C "$DIR" --no-optional-locks branch --show-current 2>/dev/null)
     _FC=0 _AD=0 _DL=0
     while IFS=$'\t' read -r a d _; do
+      # Skip binary files (reported as "-" instead of a number).
       [[ "$a" =~ ^[0-9]+$ ]] && ((_FC++, _AD += a, _DL += d))
     done < <(git -C "$DIR" --no-optional-locks diff HEAD --numstat 2>/dev/null)
     _TMP=$(mktemp /tmp/claude-sl-g-XXXXXX)
@@ -69,6 +82,9 @@ if [ -n "$BR" ]; then
   GIT=" | ${BR}${GS}"
 fi
 
+# ── Path Shortening ──
+# Worktree paths follow the pattern /<repo>/.claude/worktrees/<name>; collapse
+# them to "<repo>/<name>" so the branch-like context fits in one glance.
 SD="${DIR/#$HOME/~}"
 if [[ "$SD" =~ /([^/]+)/\.claude/worktrees/([^/]+) ]]; then
   SD="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
@@ -97,6 +113,8 @@ else
   # ── API fallback (remove when CC <2.1.80 no longer supported) ──
   UC="/tmp/claude-sl-usage" UL="/tmp/claude-sl-usage.lock"
 
+  # ── _get_token: credential source priority ──
+  # Check in order: env var → macOS Keychain → credentials file → secret-tool (Linux).
   _get_token() {
     [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && {
       echo "$CLAUDE_CODE_OAUTH_TOKEN"
@@ -111,6 +129,10 @@ else
     [ -n "$b" ] && jq -r '.claudeAiOauth.accessToken//empty' <<<"$b" 2>/dev/null
   }
 
+  # ── _fetch_usage: background stale-while-revalidate fetch ──
+  # Runs in a subshell (&) so the main process returns immediately with cached data.
+  # On API failure, touches the cache file to reset the 300s TTL and avoid a
+  # retry storm; placeholder "--" values leave the display unchanged.
   _fetch_usage() {
     (
       trap 'rm -f "$UL"' EXIT
@@ -136,6 +158,10 @@ else
     ) &
   }
 
+  # ── Lock mechanism (noclobber mutex) ──
+  # `set -o noclobber` makes `>` fail atomically if the file already exists,
+  # providing a lock without external tools. The stale-lock check (10s) ensures
+  # a crashed worker can't block refreshes indefinitely.
   if _stale "$UC" 300; then
     if (
       set -o noclobber
@@ -151,6 +177,10 @@ else
     fi
   fi
 
+  # ── Read cache + drift correction ──
+  # The cache stores countdown minutes at write time; subtract elapsed seconds
+  # (in whole minutes) since the file was written to keep the countdown accurate
+  # between 300s refresh cycles without a network call.
   U5="--" U7="--" XO=0 XU=0 XL=0 RM5="" RM7=""
   [ -f "$UC" ] && IFS='|' read -r U5 U7 XO XU XL RM5 RM7 <"$UC"
   U5=${U5%%.*} U7=${U7%%.*} XU=${XU%%.*} XL=${XL%%.*}
@@ -176,6 +206,7 @@ _usage() {
     local r=$((100 - u))
     if ((u >= 90)); then printf "${R}%d%%${N}" "$r"; elif ((u >= 70)); then printf "${Y}%d%%${N}" "$r"; else printf "${G}%d%%${N}" "$r"; fi
     if [[ "$rm" =~ ^[0-9]+$ ]] && ((rm <= w)); then
+      # Pace delta: positive = budget surplus (ahead of linear burn), negative = overspend.
       local d=$(((w - rm) * 100 / w - u))
       ((d > 10)) && printf " ${G}+%d%%${N}" "$d"
       ((d < -10)) && printf " ${R}%d%%${N}" "$d"
@@ -192,6 +223,8 @@ _usage() {
   }
   printf " ${D}(%dm)${N}" "$rm"
 }
+
+# ── Output Assembly ──
 L2="${BC}${BAR}${N} ${PCT}% of ${CL}"
 L2+=" | 5h: $(_usage "$U5" "$RM5" 300)"
 L2+=" | 7d: $(_usage "$U7" "$RM7" 10080)"
