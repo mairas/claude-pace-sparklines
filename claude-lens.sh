@@ -17,6 +17,7 @@ command -v jq >/dev/null || {
 }
 
 # ── Colors & Utilities ──
+# C=Cyan G=Green Y=Yellow R=Red D=Dim N=Normal (reset)
 C='\033[36m' G='\033[32m' Y='\033[33m' R='\033[31m' D='\033[2m' N='\033[0m'
 NOW=$(date +%s)
 # Returns true (exit 0) when file is missing or older than $2 seconds.

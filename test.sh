@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Test harness for statusline redesign
-# Usage: bash test-redesign.sh
+# Regression tests for claude-lens statusline
+# Usage: bash test.sh
 set -euo pipefail
 
 PASS=0 FAIL=0
