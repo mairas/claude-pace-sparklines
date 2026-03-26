@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code statusline plugin
 # Line1: model (ctx) effort | project (branch) Nf +A -D
-# Line2: bar PCT% CL | 5h remain [±pace] countdown  7d remain [±pace] countdown
+# Line2: bar PCT% CL | 5h used% [±pace] countdown  7d used% [±pace] countdown
 
 # Disable glob expansion so unquoted vars with wildcards (e.g. DIR paths)
 # are never accidentally expanded into filename lists.
@@ -211,14 +211,13 @@ else
   # ── End API fallback ──
 fi
 
-# Combined usage formatter: remaining% [pace delta] (countdown)
+# Combined usage formatter: used% [pace delta] (countdown)
 _usage() {
   local u="${1:---}" rm="$2" w="$3"
   if [[ ! "$u" =~ ^[0-9]+$ ]]; then
     printf "%s" "$u"
   else
-    local r=$((100 - u))
-    if ((u >= 90)); then printf "${R}%d%%${N}" "$r"; elif ((u >= 70)); then printf "${Y}%d%%${N}" "$r"; else printf "${G}%d%%${N}" "$r"; fi
+    if ((u >= 90)); then printf "${R}%d%%${N}" "$u"; elif ((u >= 70)); then printf "${Y}%d%%${N}" "$u"; else printf "${G}%d%%${N}" "$u"; fi
     if [[ "$rm" =~ ^[0-9]+$ ]] && ((rm <= w)); then
       # Pace delta: positive = budget surplus (ahead of linear burn), negative = overspend.
       local d=$(((w - rm) * 100 / w - u))
@@ -257,7 +256,7 @@ fi
 # Line 1: model (context) effort | project (branch) git-stats
 L1="${C}${MODEL} ${EF}${N}${PAD1} ${D}|${N}  ${L1R}"
 
-# Line 2: bar pct% CL | 5h ...  7d ...
+# Line 2: bar pct% CL | 5h used% ...  7d used% ...
 L2="${BC}${BAR}${N} ${PCT}% ${CL}${PAD2} ${D}|${N}  5h $(_usage "$U5" "$RM5" 300)  7d $(_usage "$U7" "$RM7" 10080)"
 # Extra usage: only when enabled and has actual spending (API fallback only)
 [ "$XO" = 1 ] && ((XU > 0)) &&
