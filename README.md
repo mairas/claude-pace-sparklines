@@ -8,7 +8,7 @@ Most statuslines show "you used 60%." That number means nothing without context.
 
 - **+17%** green = you've used 17% less than expected. Headroom. Keep going.
 - **-15%** red = you're burning 15% faster than sustainable. Slow down.
-- **92%** / **29%** = remaining in the 5h and 7d windows. **3h** = resets in 3 hours.
+- **8%** / **71%** = used in the 5h and 7d windows. **3h** = resets in 3 hours.
 - Top line: model, effort, project `(branch)`, git changes
 
 ## Install
