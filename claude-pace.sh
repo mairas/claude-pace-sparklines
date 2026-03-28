@@ -326,6 +326,104 @@ else
   # ── End API fallback ──
 fi
 
+# ── History Logging (append-only TSV, 10-min interval) ──
+HIST="$HOME/.claude/claude-pace-history.tsv"
+if [[ "$U5" =~ ^[0-9]+$ ]] && [[ "$U7" =~ ^[0-9]+$ ]] && _stale "$HIST" 600; then
+  printf '%s\t%s\t%s\n' "$NOW" "$U5" "$U7" >>"$HIST"
+  # Rotate: keep most recent ~1100 lines when file grows past 1500
+  _LC=$(wc -l <"$HIST")
+  if ((_LC > 1500)); then
+    _TMP=$(mktemp /tmp/claude-sl-h-XXXXXX)
+    tail -1100 "$HIST" >"$_TMP" && mv "$_TMP" "$HIST"
+  fi
+fi
+
+# ── Sparkline Renderer ──
+# Block-element sparkline: colored blocks for past data, dark gray blocks for future pace.
+# Usage: _sparkline REMAINING_MIN WINDOW_MIN TOTAL_SLOTS USAGE_COL CURRENT_PCT
+#   REMAINING_MIN: minutes until window resets
+#   WINDOW_MIN: total window length in minutes (300 or 10080)
+#   TOTAL_SLOTS: number of graph characters (8 or 7)
+#   USAGE_COL: column index in history TSV (2=U5, 3=U7)
+#   CURRENT_PCT: live usage percentage (injected into latest past slot)
+_sparkline() {
+  local rm="$1" wm="$2" ns="$3" col="$4" cur_pct="$5"
+  [[ "$rm" =~ ^[0-9]+$ ]] || return
+  local elapsed=$((wm - rm))
+  ((elapsed < 0)) && elapsed=0
+  local wstart=$((NOW - elapsed * 60))
+  local wsec=$((wm * 60))
+  # Proportional slot index (avoids drift from fixed slot width)
+  local cur_slot=$(( (elapsed * ns + wm / 2) / wm ))
+  ((cur_slot > ns)) && cur_slot=$ns
+
+  # Block element tables (indexed 0-8): space + ▁▂▃▄▅▆▇█
+  local -a BLK=(" " "▁" "▂" "▃" "▄" "▅" "▆" "▇" "█")
+  local DG='\033[90m'  # dark gray foreground
+
+  # Read history, bucket into slots (latest value per slot wins).
+  # Detect window resets (usage drops) and discard pre-reset data.
+  local -a slots=()
+  local si cv last_val=""
+  for ((i = 0; i < ns; i++)); do slots[$i]=""; done
+  if [ -f "$HIST" ]; then
+    while IFS=$'\t' read -r ts v5 v7; do
+      ((ts < wstart)) && continue
+      if ((col == 2)); then cv="$v5"; else cv="$v7"; fi
+      # Skip malformed lines (non-numeric values)
+      [[ "$cv" =~ ^[0-9]+$ ]] || continue
+      # Reset detected: usage dropped significantly, clear pre-reset slots
+      if [ -n "$last_val" ] && ((cv < last_val - 5 || (last_val > 0 && cv == 0))); then
+        for ((i = 0; i < ns; i++)); do slots[$i]=""; done
+      fi
+      last_val="$cv"
+      si=$(( (ts - wstart) * ns / wsec ))
+      ((si >= ns)) && si=$((ns - 1))
+      ((si >= cur_slot)) && continue
+      slots[$si]="$cv"
+    done <"$HIST"
+  fi
+
+  # Inject current live value into the latest past slot
+  ((cur_slot > 0)) && [[ "$cur_pct" =~ ^[0-9]+$ ]] && slots[$((cur_slot - 1))]="$cur_pct"
+
+  # Forward-fill and enforce monotonicity: usage is cumulative, so no slot
+  # should be lower than the previous one or empty when a prior value exists.
+  local prev=""
+  for ((i = 0; i < ns; i++)); do
+    if [ -z "${slots[$i]}" ]; then
+      slots[$i]="$prev"
+    elif [ -n "$prev" ] && ((slots[$i] < prev)); then
+      slots[$i]="$prev"
+    fi
+    [ -n "${slots[$i]}" ] && prev="${slots[$i]}"
+  done
+
+  # Render each slot
+  local out=""
+  for ((i = 0; i < ns; i++)); do
+    local pace=$(((i + 1) * 100 / ns))
+    if ((i < cur_slot)); then
+      local val="${slots[$i]:-0}"
+      # Map percentage to level 1-ns (▁ baseline, always visible)
+      local lvl=$(( (val * ns + 50) / 100 ))
+      ((lvl > ns)) && lvl=$ns
+      ((lvl < 1)) && lvl=1
+      if ((val <= pace)); then
+        out+="${G}${BLK[$lvl]}${N}"
+      else
+        out+="${R}${BLK[$lvl]}${N}"
+      fi
+    else
+      # Future slot: dark gray block at pace height
+      local plvl=$(( (pace * ns + 50) / 100 ))
+      ((plvl > ns)) && plvl=$ns
+      out+="${DG}${BLK[$plvl]}${N}"
+    fi
+  done
+  printf '%b' "$out"
+}
+
 # Combined usage formatter: used% [pace delta] (countdown)
 _usage() {
   local u="${1:---}" rm="$2" w="$3"
@@ -371,8 +469,12 @@ fi
 # Line 1: model (context) effort | project (branch) git-stats
 L1="${C}${MODEL} ${EF}${N}${PAD1} ${D}|${N}  ${L1R}"
 
-# Line 2: bar pct% CL | 5h used% ...  7d used% ...
-L2="${BC}${BAR}${N} ${PCT}% ${CL}${PAD2} ${D}|${N}  5h $(_usage "$U5" "$RM5" 300)  7d $(_usage "$U7" "$RM7" 10080)"
+# Line 2: bar pct% CL | 5h [sparkline] used% ...  7d [sparkline] used% ...
+_SL5=$(_sparkline "$RM5" 300 8 2 "$U5")   # 8 slots ≈ 37min each, scale 0-8
+_SL7=$(_sparkline "$RM7" 10080 7 3 "$U7") # 7 slots = 1 day each, scale 0-7
+[ -n "$_SL5" ] && _SL5="$_SL5 "
+[ -n "$_SL7" ] && _SL7="$_SL7 "
+L2="${BC}${BAR}${N} ${PCT}% ${CL}${PAD2} ${D}|${N}  5h ${_SL5}$(_usage "$U5" "$RM5" 300)  7d ${_SL7}$(_usage "$U7" "$RM7" 10080)"
 # Extra usage: only when enabled and has actual spending (API fallback only)
 [ "$XO" = 1 ] && ((XU > 0)) &&
   printf -v _XS "  ${Y}\$%d.%02d${N}/\$%d.%02d" $((XU / 100)) $((XU % 100)) $((XL / 100)) $((XL % 100)) && L2+="$_XS"

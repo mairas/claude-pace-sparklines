@@ -1,4 +1,8 @@
-# Claude Pace
+# Claude Pace (fork with sparklines)
+
+> **This is a fork of [Astro-Han/claude-pace](https://github.com/Astro-Han/claude-pace)** that adds inline sparkline graphs showing usage trends over time. Block-element sparklines (▁▂▃▄▅▆▇█) display 5h and 7d usage trajectories — past slots colored green (under pace) or red (over pace), future slots show the pace staircase in dark gray.
+>
+> ![sparklines screenshot](.github/sparklines.png)
 
 Know your quota before you hit the wall. A statusline for Claude Code — single Bash file, zero npm.
 
