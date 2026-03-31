@@ -13,25 +13,26 @@ Most statuslines show "you used 60%." That number means nothing without context.
 
 ## Install
 
-Requires `jq`. Node.js is only needed for install, not runtime.
+Requires `jq`.
+
+**Plugin (recommended):**
+
+Inside Claude Code:
+
+```
+/plugin marketplace add Astro-Han/claude-pace
+/plugin install claude-pace
+/reload-plugins
+/claude-pace:setup
+```
+
+**npx:**
 
 ```bash
 npx claude-pace
 ```
 
 Restart Claude Code. Done.
-
-<details>
-<summary>Other methods</summary>
-
-**Plugin:**
-
-```bash
-claude plugin marketplace add Astro-Han/claude-pace
-claude plugin install claude-pace
-```
-
-Then inside Claude Code, type `/claude-pace:setup`.
 
 **Manual:**
 
@@ -53,8 +54,6 @@ Add to `~/.claude/settings.json`:
 ```
 
 Restart Claude Code. Done.
-
-</details>
 
 To remove: delete the `statusLine` block from `~/.claude/settings.json`.
 
