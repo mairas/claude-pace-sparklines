@@ -57,6 +57,14 @@ Restart Claude Code. Done.
 
 To remove: delete the `statusLine` block from `~/.claude/settings.json`.
 
+## Upgrade
+
+- **Plugin:** `/claude-pace:setup` (pulls the latest from GitHub)
+- **npx:** `npx claude-pace@latest`
+- **Manual:** Re-run the `curl` command above.
+
+Release notifications: Watch this repo → Custom → Releases.
+
 ## How It Compares
 
 |  | claude-pace | Node.js/TypeScript statuslines | Rust/Go statuslines |
