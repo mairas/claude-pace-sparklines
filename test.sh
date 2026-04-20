@@ -83,26 +83,6 @@ run_with_env() {
 run_side_effect_with_env() {
   invoke_with_env "$1" "$2" "$3" >/dev/null
 }
-invoke_with_env_and_path() {
-  local home_dir="$1" runtime_dir="$2" path_dir="$3" input="$4"
-  env HOME="$home_dir" XDG_RUNTIME_DIR="$runtime_dir" USER=tester PATH="$path_dir:$PATH" \
-    CLAUDE_CODE_OAUTH_TOKEN=fake-token bash claude-pace-sparklines.sh 2>/dev/null <<<"$input"
-}
-invoke_with_env_and_path_and_token() {
-  local home_dir="$1" runtime_dir="$2" path_dir="$3" token="$4" input="$5"
-  env HOME="$home_dir" XDG_RUNTIME_DIR="$runtime_dir" USER=tester PATH="$path_dir:$PATH" \
-    CLAUDE_CODE_OAUTH_TOKEN="$token" bash claude-pace-sparklines.sh 2>/dev/null <<<"$input"
-}
-run_with_env_and_path() {
-  invoke_with_env_and_path "$1" "$2" "$3" "$4" | strip_ansi
-}
-run_side_effect_with_env_and_path() {
-  invoke_with_env_and_path "$1" "$2" "$3" "$4" >/dev/null
-}
-run_side_effect_with_env_and_path_and_token() {
-  invoke_with_env_and_path_and_token "$1" "$2" "$3" "$4" "$5" >/dev/null
-}
-
 git_cache_path_for_dir() {
   local dir="$1"
   printf '/tmp/claude-sl-git-%s\n' "${dir//[^a-zA-Z0-9]/_}"
@@ -190,7 +170,7 @@ assert_line "no arrow at d=0" 2 '5h [^:]+50% [0-9]'
 # ── Test 12: Sparkline with mock history ──
 echo "Test 12: sparkline rendering"
 # Create mock history: 5 data points over 2.5 hours, usage rising from 5% to 50%
-_HIST="$HOME/.claude/claude-pace-history.tsv"
+_HIST="$HOME/.claude/claude-pace-sparklines-history.tsv"
 _HIST_BAK=""
 [ -f "$_HIST" ] && { _HIST_BAK=$(mktemp /tmp/claude-sl-hist-bak-XXXXXX); cp "$_HIST" "$_HIST_BAK"; }
 # Window resets in 150 min (2.5h elapsed of 5h), so wstart = NOW - 150*60
@@ -284,24 +264,24 @@ else
   rm -f "$_HIST"
 fi
 
-# ── Test 12: Branch cache must not inject newlines into output ──
-echo "Test 12: branch cache newline injection"
+# ── Test 18: Branch cache must not inject newlines into output ──
+echo "Test 18: branch cache newline injection"
 INJECT_HOME="$TEST_TMP/inject-home"
 INJECT_RUNTIME="$TEST_TMP/inject-runtime"
 INJECT_DIR="$TEST_TMP/non-git-escape"
-INJECT_CACHE_ROOT="$INJECT_RUNTIME/claude-pace"
+INJECT_CACHE_ROOT="$INJECT_RUNTIME/claude-pace-sparklines"
 mkdir -p "$INJECT_HOME" "$INJECT_RUNTIME" "$INJECT_DIR" "$INJECT_CACHE_ROOT"
 GC="$INJECT_CACHE_ROOT/claude-sl-git-${INJECT_DIR//[^a-zA-Z0-9]/_}"
 printf 'feature\\nPWN|0|0|0\n' >"$GC"
 OUTPUT=$(run_with_env "$INJECT_HOME" "$INJECT_RUNTIME" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$INJECT_DIR"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":'"$((NOW + 12000))"'},"seven_day":{"used_percentage":15,"resets_at":'"$((NOW + 500000))"'}}}')
 assert_line_count "branch cache keeps output to two lines" 2
 
-# ── Test 13: Git cache arithmetic payload must not execute ──
-echo "Test 13: git cache arithmetic injection"
+# ── Test 19: Git cache arithmetic payload must not execute ──
+echo "Test 19: git cache arithmetic injection"
 INJECT_GIT_HOME="$TEST_TMP/non-git-arith-home"
 INJECT_GIT_RUNTIME="$TEST_TMP/non-git-arith-runtime"
 INJECT_GIT_DIR="$TEST_TMP/non-git-arith"
-INJECT_GIT_CACHE_ROOT="$INJECT_GIT_RUNTIME/claude-pace"
+INJECT_GIT_CACHE_ROOT="$INJECT_GIT_RUNTIME/claude-pace-sparklines"
 mkdir -p "$INJECT_GIT_HOME" "$INJECT_GIT_RUNTIME" "$INJECT_GIT_DIR" "$INJECT_GIT_CACHE_ROOT"
 GC="$INJECT_GIT_CACHE_ROOT/claude-sl-git-${INJECT_GIT_DIR//[^a-zA-Z0-9]/_}"
 GIT_MARKER="$TEST_TMP/git-arith-marker"
@@ -310,19 +290,19 @@ printf 'main|%s|0|0\n' "$FC_PAYLOAD" >"$GC"
 run_side_effect_with_env "$INJECT_GIT_HOME" "$INJECT_GIT_RUNTIME" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$INJECT_GIT_DIR"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":'"$((NOW + 12000))"'},"seven_day":{"used_percentage":15,"resets_at":'"$((NOW + 500000))"'}}}'
 assert_missing_path "git cache arithmetic payload is not executed" "$GIT_MARKER"
 
-# ── Test 14: Usage cache arithmetic payload must not execute ──
-echo "Test 14: usage cache arithmetic injection"
+# ── Test 20: Usage cache arithmetic payload must not execute ──
+echo "Test 20: usage cache arithmetic injection"
 USAGE_HOME="$TEST_TMP/usage-arith-home"
 USAGE_RUNTIME="$TEST_TMP/usage-arith-runtime"
-USAGE_CACHE_ROOT="$USAGE_RUNTIME/claude-pace"
+USAGE_CACHE_ROOT="$USAGE_RUNTIME/claude-pace-sparklines"
 mkdir -p "$USAGE_HOME" "$USAGE_RUNTIME" "$USAGE_CACHE_ROOT"
 XU_PAYLOAD="a[\$(printf usage >$USAGE_ARITH_MARKER)]"
 printf '%s\n' "--|--|1|$XU_PAYLOAD|0||" >"$USAGE_CACHE_ROOT/claude-sl-usage"
 run_side_effect_with_env "$USAGE_HOME" "$USAGE_RUNTIME" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000}}'
 assert_missing_path "usage cache arithmetic payload is not executed" "$USAGE_ARITH_MARKER"
 
-# ── Test 15: Shared /tmp git cache must be ignored when using a private cache root ──
-echo "Test 15: private cache root ignores shared tmp git cache"
+# ── Test 21: Shared /tmp git cache must be ignored when using a private cache root ──
+echo "Test 21: private cache root ignores shared tmp git cache"
 PRIVATE_HOME="$TEST_TMP/private-home"
 PRIVATE_RUNTIME="$TEST_TMP/private-runtime"
 PRIVATE_REPO="$TEST_TMP/private-repo"
@@ -340,8 +320,8 @@ else
   echo "    actual line: $(printf '%s\n' "$OUTPUT" | sed -n '1p')"
 fi
 
-# ── Test 16: Cache format must preserve branch names that contain | ──
-echo "Test 16: branch names containing pipes survive cache round-trip"
+# ── Test 22: Cache format must preserve branch names that contain | ──
+echo "Test 22: branch names containing pipes survive cache round-trip"
 PIPE_HOME="$TEST_TMP/pipe-home"
 PIPE_RUNTIME="$TEST_TMP/pipe-runtime"
 PIPE_REPO="$TEST_TMP/pipe-repo"
@@ -358,128 +338,18 @@ else
   echo "    actual line: $(printf '%s\n' "$OUTPUT" | sed -n '1p')"
 fi
 
-# ── Test 17: Git fallback write must not follow symlinks ──
-echo "Test 17: git fallback does not clobber symlink targets"
+# ── Test 23: Git fallback write must not follow symlinks ──
+echo "Test 23: git fallback does not clobber symlink targets"
 SYMLINK_HOME="$TEST_TMP/symlink-home"
 SYMLINK_RUNTIME="$TEST_TMP/symlink-runtime"
 SYMLINK_PROJECT="$TEST_TMP/symlink-project"
-SYMLINK_CACHE_ROOT="$SYMLINK_RUNTIME/claude-pace"
+SYMLINK_CACHE_ROOT="$SYMLINK_RUNTIME/claude-pace-sparklines"
 SYMLINK_TARGET="$TEST_TMP/git-fallback-target"
 mkdir -p "$SYMLINK_HOME" "$SYMLINK_RUNTIME" "$SYMLINK_PROJECT" "$SYMLINK_CACHE_ROOT"
 GC="$SYMLINK_CACHE_ROOT/claude-sl-git-${SYMLINK_PROJECT//[^a-zA-Z0-9]/_}"
 ln -s "$SYMLINK_TARGET" "$GC"
 run_side_effect_with_env "$SYMLINK_HOME" "$SYMLINK_RUNTIME" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$SYMLINK_PROJECT"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":'"$((NOW + 12000))"'},"seven_day":{"used_percentage":15,"resets_at":'"$((NOW + 500000))"'}}}'
 assert_missing_path "git fallback leaves symlink target untouched" "$SYMLINK_TARGET"
-
-# ── Test 18: Usage fallback write must not follow symlinks ──
-echo "Test 18: usage fallback does not clobber symlink targets"
-USAGE_HOME="$TEST_TMP/usage-home"
-USAGE_RUNTIME="$TEST_TMP/usage-runtime"
-FAKE_BIN="$TEST_TMP/fake-bin"
-USAGE_CACHE_ROOT="$USAGE_RUNTIME/claude-pace"
-USAGE_TARGET="$TEST_TMP/usage-fallback-target"
-mkdir -p "$USAGE_HOME" "$USAGE_RUNTIME" "$FAKE_BIN" "$USAGE_CACHE_ROOT"
-cat >"$FAKE_BIN/curl" <<'EOF'
-#!/usr/bin/env bash
-printf 'not-json\n'
-EOF
-chmod +x "$FAKE_BIN/curl"
-UC_PATH="$USAGE_CACHE_ROOT/claude-sl-usage"
-UL_PATH="$USAGE_CACHE_ROOT/claude-sl-usage.lock"
-ln -s "$USAGE_TARGET" "$UC_PATH"
-run_side_effect_with_env_and_path "$USAGE_HOME" "$USAGE_RUNTIME" "$FAKE_BIN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000}}'
-for _ in 1 2 3 4 5; do
-  [[ -e "$USAGE_TARGET" ]] && break
-  sleep 0.2
-done
-assert_missing_path "usage fallback leaves symlink target untouched" "$USAGE_TARGET"
-[ -e "$UL_PATH" ] && rm -f "$UL_PATH"
-
-# ── Test 19: No-cache mode must still fetch usage API data ──
-echo "Test 19: no-cache mode still fetches usage API"
-NO_CACHE_FAKE_BIN="$TEST_TMP/no-cache-fake-bin"
-mkdir -p "$NO_CACHE_FAKE_BIN"
-cat >"$NO_CACHE_FAKE_BIN/curl" <<'EOF'
-#!/usr/bin/env bash
-cat <<'JSON'
-{"five_hour":{"utilization":11,"resets_at":"2030-01-01T01:00:00Z"},"seven_day":{"utilization":22,"resets_at":"2030-01-07T01:00:00Z"},"extra_usage":{"is_enabled":true,"used_credits":123,"monthly_limit":500}}
-JSON
-EOF
-chmod +x "$NO_CACHE_FAKE_BIN/curl"
-OUTPUT=$(run_with_env_and_path "/dev/null" "" "$NO_CACHE_FAKE_BIN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}')
-assert_line "no-cache mode still shows fetched 5h usage" 2 '5h .* 11%'
-assert_line "no-cache mode still shows fetched 7d usage" 2 '7d .* 22%'
-
-# ── Test 20: Usage API token must not appear in curl argv ──
-echo "Test 20: usage API token stays out of curl argv"
-TOKEN_SAFE_BIN="$TEST_TMP/token-safe-bin"
-TOKEN_SAFE_ARGS="$TEST_TMP/token-safe-args"
-TOKEN_SAFE_HEADERS="$TEST_TMP/token-safe-headers"
-mkdir -p "$TOKEN_SAFE_BIN"
-cat >"$TOKEN_SAFE_BIN/curl" <<EOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >"$TOKEN_SAFE_ARGS"
-: >"$TOKEN_SAFE_HEADERS"
-for arg in "\$@"; do
-  case "\$arg" in
-    @*)
-      cat "\${arg#@}" >>"$TOKEN_SAFE_HEADERS"
-      ;;
-  esac
-done
-printf 'not-json\n'
-EOF
-chmod +x "$TOKEN_SAFE_BIN/curl"
-OUTPUT=$(run_with_env_and_path "/dev/null" "" "$TOKEN_SAFE_BIN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}')
-if [[ ! -f "$TOKEN_SAFE_ARGS" ]]; then
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: token-safe path invokes curl"
-elif grep -Fq 'fake-token' "$TOKEN_SAFE_ARGS"; then
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: usage API token stays out of curl argv"
-  echo "    argv: $(cat "$TOKEN_SAFE_ARGS")"
-elif ! grep -Fq 'Authorization: Bearer fake-token' "$TOKEN_SAFE_HEADERS"; then
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: token-safe path still passes authorization header"
-  echo "    headers: $(cat "$TOKEN_SAFE_HEADERS")"
-else
-  PASS=$((PASS + 1))
-  echo "  PASS: token-safe path invokes curl"
-  PASS=$((PASS + 1))
-  echo "  PASS: usage API token stays out of curl argv"
-  PASS=$((PASS + 1))
-  echo "  PASS: token-safe path still passes authorization header"
-fi
-
-# ── Test 21: Malformed token with newline must not reach curl ──
-echo "Test 21: malformed token is rejected before curl"
-TOKEN_REJECT_BIN="$TEST_TMP/token-reject-bin"
-TOKEN_REJECT_MARKER="$TEST_TMP/token-reject-marker"
-mkdir -p "$TOKEN_REJECT_BIN"
-cat >"$TOKEN_REJECT_BIN/curl" <<EOF
-#!/usr/bin/env bash
-printf 'called\n' >"$TOKEN_REJECT_MARKER"
-printf 'not-json\n'
-EOF
-chmod +x "$TOKEN_REJECT_BIN/curl"
-BAD_TOKEN=$'bad-token\nurl = https://evil.invalid'
-run_side_effect_with_env_and_path_and_token "/dev/null" "" "$TOKEN_REJECT_BIN" "$BAD_TOKEN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}'
-assert_missing_path "malformed token does not invoke curl" "$TOKEN_REJECT_MARKER"
-
-# ── Test 22: Token ending with newline must not reach curl ──
-echo "Test 22: trailing newline token is rejected before curl"
-TOKEN_TRAILING_BIN="$TEST_TMP/token-trailing-bin"
-TOKEN_TRAILING_MARKER="$TEST_TMP/token-trailing-marker"
-mkdir -p "$TOKEN_TRAILING_BIN"
-cat >"$TOKEN_TRAILING_BIN/curl" <<EOF
-#!/usr/bin/env bash
-printf 'called\n' >"$TOKEN_TRAILING_MARKER"
-printf 'not-json\n'
-EOF
-chmod +x "$TOKEN_TRAILING_BIN/curl"
-TRAILING_BAD_TOKEN=$'bad-token\n'
-run_side_effect_with_env_and_path_and_token "/dev/null" "" "$TOKEN_TRAILING_BIN" "$TRAILING_BAD_TOKEN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}'
-assert_missing_path "trailing newline token does not invoke curl" "$TOKEN_TRAILING_MARKER"
 
 # ── Summary ──
 echo ""

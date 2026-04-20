@@ -104,15 +104,12 @@ done
 _stale() { [ ! -f "$1" ] || [ $((NOW - $(stat -f%m "$1" 2>/dev/null || stat -c%Y "$1" 2>/dev/null || echo 0))) -gt "$2" ]; }
 
 # ── Parse stdin + settings in one jq call ──
-# Fields: MODEL DIR PCT CTX COST EFF HAS_RL U5 U7 R5 R7
-HAS_RL=0
-IFS=$'\t' read -r MODEL DIR PCT CTX COST EFF HAS_RL U5 U7 R5 R7 < <(
+# Fields: MODEL DIR PCT CTX EFF U5 U7 R5 R7
+IFS=$'\t' read -r MODEL DIR PCT CTX EFF U5 U7 R5 R7 < <(
   jq -r --slurpfile cfg <(cat ~/.claude/settings.json 2>/dev/null || echo '{}') \
     '[(.model.display_name//"?"),(.workspace.project_dir//"."),
     (.context_window.used_percentage//0|floor),(.context_window.context_window_size//0),
-    (.cost.total_cost_usd//0),
     ($cfg[0].effortLevel//"default"),
-    (if .rate_limits then 1 else 0 end),
     (.rate_limits.five_hour.used_percentage//null|if type=="number" then floor else "--" end),
     (.rate_limits.seven_day.used_percentage//null|if type=="number" then floor else "--" end),
     (.rate_limits.five_hour.resets_at//0),
@@ -193,141 +190,15 @@ elif [[ "$IS_WT" == "1" ]]; then
   ((${#L1R} > 25)) && L1R="${L1R:0:25}…"
 fi
 
-# Usage data: prefer stdin rate_limits (CC >=2.1.80), fall back to API polling
-SHOW_COST=0
-if [[ "$HAS_RL" == "1" ]]; then
-  # Stdin path: real-time, no network. U5/U7 already set by jq read above.
-  # Guard: resets_at=0 means field missing, leave RM empty so _pace/_rc skip it
-  RM5=$(_minutes_until "$R5")
-  RM7=$(_minutes_until "$R7")
-  # Extra usage (XO/XU/XL) only available via API fallback; stdin lacks this data
-else
-  # ── API fallback (remove when CC <2.1.80 no longer supported) ──
-  UC="" UL=""
-  [[ "$CACHE_OK" == "1" ]] && {
-    UC="${_CD}/claude-sl-usage"
-    UL="${_CD}/claude-sl-usage.lock"
-  }
-
-  # ── _get_token: credential source priority ──
-  # Check in order: env var → macOS Keychain → credentials file → secret-tool (Linux).
-  _get_token() {
-    [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && {
-      printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN"
-      return
-    }
-    local b=""
-    command -v security >/dev/null &&
-      b=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
-    [ -z "$b" ] && [ -f ~/.claude/.credentials.json ] && b=$(<~/.claude/.credentials.json)
-    [ -z "$b" ] && command -v secret-tool >/dev/null &&
-      b=$(timeout 2 secret-tool lookup service "Claude Code-credentials" 2>/dev/null)
-    [ -n "$b" ] && jq -j '.claudeAiOauth.accessToken//empty' <<<"$b" 2>/dev/null
-  }
-
-  # ── _fetch_usage_api: direct API read into usage globals ──
-  # Used by both the cached background refresh path and the no-cache fallback.
-  _fetch_usage_api() {
-    local tk resp
-    # Command substitution strips trailing newlines. Append a sentinel byte only
-    # on success so malformed tokens with a trailing LF remain detectable here.
-    tk=$(_get_token && printf '\001') || return 1
-    [[ "$tk" == *$'\001' ]] || return 1
-    tk=${tk%$'\001'}
-    [ -n "$tk" ] || return 1
-    # OAuth bearer tokens must remain a single header line. Reject malformed
-    # credentials up front instead of letting curl parse injected CR/LF bytes.
-    case "$tk" in *$'\n'* | *$'\r'*) return 1 ;; esac
-    # Feed headers through process substitution so the bearer token stays out
-    # of curl argv while preserving literal bytes like quotes and backslashes.
-    resp=$(curl -s --max-time 3 \
-      -H @<(printf 'Authorization: Bearer %s\n' "$tk"
-        printf '%s\n' 'anthropic-beta: oauth-2025-04-20'
-        printf '%s\n' 'Content-Type: application/json') \
-      "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
-    IFS=$'\t' read -r U5 U7 XO XU XL RM5 RM7 < <(jq -r '
-      def rmins: if . and . != "" then (sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) - (now|floor) | ./60|floor | if .<0 then 0 else . end else null end;
-      [(.five_hour.utilization|floor),(.seven_day.utilization|floor),
-        (if .extra_usage.is_enabled then 1 else 0 end),
-        (.extra_usage.used_credits//0|floor),(.extra_usage.monthly_limit//0|floor),
-        (.five_hour.resets_at|rmins//""),(.seven_day.resets_at|rmins//"")]|@tsv' \
-      <<<"$resp" 2>/dev/null) || return 1
-  }
-
-  # ── _fetch_usage: background stale-while-revalidate fetch ──
-  # Runs in a subshell (&) so the main process returns immediately with cached data.
-  # On API failure, writes placeholder values once so the UI stays stable and
-  # avoids repeated refresh attempts until the cache TTL expires.
-  _fetch_usage() {
-    (
-      trap 'rm -f "$UL"' EXIT
-      if _fetch_usage_api; then
-        _write_cache_record "$UC" "$U5" "$U7" "$XO" "$XU" "$XL" "$RM5" "$RM7"
-      else
-        if [ ! -f "$UC" ] || [[ $(head -c2 "$UC") == -- ]]; then
-          _write_cache_record "$UC" "--" "--" "0" "0" "0" "" ""
-        fi
-      fi
-    ) &
-  }
-
-  # ── Lock mechanism (noclobber mutex) ──
-  # `set -o noclobber` makes `>` fail atomically if the file already exists,
-  # providing a lock without external tools. The stale-lock check (10s) ensures
-  # a crashed worker can't block refreshes indefinitely.
-  if [[ "$CACHE_OK" == "1" ]] && _stale "$UC" 300; then
-    if (
-      set -o noclobber
-      echo $$ >"$UL"
-    ) 2>/dev/null; then
-      _fetch_usage
-    elif [ -f "$UL" ] && _stale "$UL" 10; then
-      rm -f "$UL"
-      (
-        set -o noclobber
-        echo $$ >"$UL"
-      ) 2>/dev/null && _fetch_usage
-    fi
-  fi
-
-  # ── Read cache + drift correction ──
-  # The cache stores countdown minutes at write time; subtract elapsed seconds
-  # (in whole minutes) since the file was written to keep the countdown accurate
-  # between 300s refresh cycles without a network call.
-  U5="--" U7="--" XO=0 XU=0 XL=0 RM5="" RM7=""
-  if [[ "$CACHE_OK" == "1" ]]; then
-    if _load_cache_record_file "$UC"; then
-      U5=${CACHE_FIELDS[0]:---}
-      U7=${CACHE_FIELDS[1]:---}
-      XO=${CACHE_FIELDS[2]:-0}
-      XU=${CACHE_FIELDS[3]:-0}
-      XL=${CACHE_FIELDS[4]:-0}
-      RM5=${CACHE_FIELDS[5]:-}
-      RM7=${CACHE_FIELDS[6]:-}
-    fi
-    if [[ "$RM5" =~ ^[0-9]+$ ]] && [ -f "$UC" ]; then
-      _CA=$((NOW - $(stat -f%m "$UC" 2>/dev/null || stat -c%Y "$UC" 2>/dev/null || echo "$NOW")))
-      RM5=$((RM5 - _CA / 60))
-      ((RM5 < 0)) && RM5=0
-      [[ "$RM7" =~ ^[0-9]+$ ]] && {
-        RM7=$((RM7 - _CA / 60))
-        ((RM7 < 0)) && RM7=0
-      }
-    fi
-    [ ! -f "$UC" ] && SHOW_COST=1
-  elif ! _fetch_usage_api; then
-    SHOW_COST=1
-  fi
-  U5=${U5%%.*} U7=${U7%%.*} XU=${XU%%.*} XL=${XL%%.*}
-  # Reject cache corruption or malformed API data before arithmetic formatting.
-  [[ "$XO" =~ ^[01]$ ]] || XO=0
-  [[ "$XU" =~ ^[0-9]+$ ]] || XU=0
-  [[ "$XL" =~ ^[0-9]+$ ]] || XL=0
-  # ── End API fallback ──
-fi
+# Usage data from stdin rate_limits (requires CC >= 2.1.80)
+# Guard: resets_at=0 means field missing, leave RM empty so _pace/_rc skip it
+RM5=$(_minutes_until "$R5")
+RM7=$(_minutes_until "$R7")
 
 # ── History Logging (append-only TSV, 10-min interval) ──
 HIST="$HOME/.claude/claude-pace-sparklines-history.tsv"
+# Migrate old history file from pre-rename versions
+[ ! -f "$HIST" ] && [ -f "$HOME/.claude/claude-pace-history.tsv" ] && mv "$HOME/.claude/claude-pace-history.tsv" "$HIST"
 if [[ "$U5" =~ ^[0-9]+$ ]] && [[ "$U7" =~ ^[0-9]+$ ]] && _stale "$HIST" 600; then
   printf '%s\t%s\t%s\n' "$NOW" "$U5" "$U7" >>"$HIST"
   # Rotate: keep most recent ~1100 lines when file grows past 1500
@@ -451,9 +322,6 @@ _usage() {
 }
 
 # ── Output Assembly (symmetric single-pipe alignment) ──
-# Default XO/XU/XL for stdin path (extra usage only available via API fallback).
-: "${XO:=0}" "${XU:=0}" "${XL:=0}"
-
 # Build plain-text left sections for width measurement (no ANSI codes).
 L1_PLAIN="${MODEL} ${EF}"
 L2_PLAIN="${BAR} ${PCT}% ${CL}"
@@ -475,14 +343,6 @@ _SL7=$(_sparkline "$RM7" 10080 7 3 "$U7") # 7 slots = 1 day each, scale 0-7
 [ -n "$_SL5" ] && _SL5="$_SL5 "
 [ -n "$_SL7" ] && _SL7="$_SL7 "
 L2="${BC}${BAR}${N} ${PCT}% ${CL}${PAD2} ${D}|${N}  5h ${_SL5}$(_usage "$U5" "$RM5" 300)  7d ${_SL7}$(_usage "$U7" "$RM7" 10080)"
-# Extra usage: only when enabled and has actual spending (API fallback only)
-[ "$XO" = 1 ] && ((XU > 0)) &&
-  printf -v _XS "  ${Y}\$%d.%02d${N}/\$%d.%02d" $((XU / 100)) $((XU % 100)) $((XL / 100)) $((XL % 100)) && L2+="$_XS"
-# Session cost: only when this run has no readable usage cache data.
-if [[ "$SHOW_COST" == "1" ]]; then
-  printf -v _CS "\$%.2f" "$COST" 2>/dev/null
-  [[ "$_CS" != "\$0.00" ]] && L2+="  $_CS"
-fi
 
 printf '%s\n' "$L1"
 printf '%s\n' "$L2"
