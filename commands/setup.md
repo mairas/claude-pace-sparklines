@@ -22,7 +22,7 @@ Always fetch from the main branch to get the latest version:
 
 ```bash
 curl -fsSL -o ~/.claude/statusline.sh \
-  https://raw.githubusercontent.com/Astro-Han/claude-pace/main/claude-pace.sh
+  https://raw.githubusercontent.com/mairas/claude-pace-sparklines/main/claude-pace-sparklines.sh
 chmod +x ~/.claude/statusline.sh
 ```
 

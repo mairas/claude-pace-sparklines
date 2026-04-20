@@ -71,11 +71,11 @@ assert_line_count() {
 
 NOW=$(date +%s)
 REPO_NAME=$(basename "$PWD")
-run() { echo "$1" | bash claude-pace.sh 2>/dev/null | strip_ansi; }
+run() { echo "$1" | bash claude-pace-sparklines.sh 2>/dev/null | strip_ansi; }
 invoke_with_env() {
   local home_dir="$1" runtime_dir="$2" input="$3"
   env HOME="$home_dir" XDG_RUNTIME_DIR="$runtime_dir" USER=tester PATH="$PATH" \
-    bash claude-pace.sh 2>/dev/null <<<"$input"
+    bash claude-pace-sparklines.sh 2>/dev/null <<<"$input"
 }
 run_with_env() {
   invoke_with_env "$1" "$2" "$3" | strip_ansi
@@ -86,12 +86,12 @@ run_side_effect_with_env() {
 invoke_with_env_and_path() {
   local home_dir="$1" runtime_dir="$2" path_dir="$3" input="$4"
   env HOME="$home_dir" XDG_RUNTIME_DIR="$runtime_dir" USER=tester PATH="$path_dir:$PATH" \
-    CLAUDE_CODE_OAUTH_TOKEN=fake-token bash claude-pace.sh 2>/dev/null <<<"$input"
+    CLAUDE_CODE_OAUTH_TOKEN=fake-token bash claude-pace-sparklines.sh 2>/dev/null <<<"$input"
 }
 invoke_with_env_and_path_and_token() {
   local home_dir="$1" runtime_dir="$2" path_dir="$3" token="$4" input="$5"
   env HOME="$home_dir" XDG_RUNTIME_DIR="$runtime_dir" USER=tester PATH="$path_dir:$PATH" \
-    CLAUDE_CODE_OAUTH_TOKEN="$token" bash claude-pace.sh 2>/dev/null <<<"$input"
+    CLAUDE_CODE_OAUTH_TOKEN="$token" bash claude-pace-sparklines.sh 2>/dev/null <<<"$input"
 }
 run_with_env_and_path() {
   invoke_with_env_and_path "$1" "$2" "$3" "$4" | strip_ansi
@@ -407,8 +407,8 @@ JSON
 EOF
 chmod +x "$NO_CACHE_FAKE_BIN/curl"
 OUTPUT=$(run_with_env_and_path "/dev/null" "" "$NO_CACHE_FAKE_BIN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}')
-assert_line "no-cache mode still shows fetched 5h usage" 2 '5h 11%'
-assert_line "no-cache mode still shows fetched 7d usage" 2 '7d 22%'
+assert_line "no-cache mode still shows fetched 5h usage" 2 '5h .* 11%'
+assert_line "no-cache mode still shows fetched 7d usage" 2 '7d .* 22%'
 
 # ── Test 20: Usage API token must not appear in curl argv ──
 echo "Test 20: usage API token stays out of curl argv"

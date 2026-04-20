@@ -93,7 +93,7 @@ _collect_git_info() {
 _CD="" CACHE_OK=0
 for _BASE in "${XDG_RUNTIME_DIR:-}" "${HOME}/.cache"; do
   [ -n "$_BASE" ] || continue
-  _CAND="${_BASE%/}/claude-pace"
+  _CAND="${_BASE%/}/claude-pace-sparklines"
   [ -e "$_CAND" ] || mkdir -p -m 700 "$_CAND" 2>/dev/null || continue
   _cache_dir_ok "$_CAND" || continue
   _CD="$_CAND"
@@ -327,7 +327,7 @@ else
 fi
 
 # ── History Logging (append-only TSV, 10-min interval) ──
-HIST="$HOME/.claude/claude-pace-history.tsv"
+HIST="$HOME/.claude/claude-pace-sparklines-history.tsv"
 if [[ "$U5" =~ ^[0-9]+$ ]] && [[ "$U7" =~ ^[0-9]+$ ]] && _stale "$HIST" 600; then
   printf '%s\t%s\t%s\n' "$NOW" "$U5" "$U7" >>"$HIST"
   # Rotate: keep most recent ~1100 lines when file grows past 1500
@@ -440,11 +440,11 @@ _usage() {
   fi
   [[ "$rm" =~ ^[0-9]+$ ]] || return
   ((rm >= 1440)) && {
-    printf " ${D}%dd${N}" $((rm / 1440))
+    printf " ${D}%dd${N}" $(( (rm + 720) / 1440 ))
     return
   }
   ((rm >= 60)) && {
-    printf " ${D}%dh${N}" $((rm / 60))
+    printf " ${D}%dh${N}" $(( (rm + 30) / 60 ))
     return
   }
   printf " ${D}%dm${N}" "$rm"

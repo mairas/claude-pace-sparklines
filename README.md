@@ -1,48 +1,29 @@
-# Claude Pace (fork with sparklines)
+# Claude Pace Sparklines
 
-> **This is a fork of [Astro-Han/claude-pace](https://github.com/Astro-Han/claude-pace)** that adds inline sparkline graphs showing usage trends over time. Block-element sparklines (▁▂▃▄▅▆▇█) display 5h and 7d usage trajectories — past slots colored green (under pace) or red (over pace), future slots show the pace staircase in dark gray.
->
-> ![sparklines screenshot](.github/sparklines.png)
+A statusline for Claude Code with pace tracking and sparkline usage graphs. Single Bash file, zero npm. Only requires `jq`.
 
-Know your quota before you hit the wall. A statusline for Claude Code — single Bash file, zero npm.
+![claude-pace statusline](.github/sparklines.png)
 
-Most statuslines show "you used 60%." That number means nothing without context. 60% with 30 minutes left? Fine, the window resets soon. 60% with 4 hours left? You're about to hit the wall. claude-pace compares your usage rate to the time remaining and shows the delta. No Node.js, no npm, no lock files. Single Bash file.
+## What It Shows
 
-![claude-pace statusline demo](.github/claude-pace-demo.gif)
+Most statuslines show "you used 60%." That number means nothing without context — 60% with 30 minutes left is fine, but 60% with 4 hours left means you're about to hit the wall. Claude Pace compares your usage rate to the time remaining and shows the delta.
 
-- **⇣15%** green = you've used 15% less than expected. Headroom. Keep going.
-- **⇡15%** red = you're burning 15% faster than sustainable. Slow down.
-- **15%** / **20%** = used in the 5h and 7d windows. **3h** = resets in 3 hours.
-- Top line: model, effort, project `(branch)`, `3f +24 -7` = git diff stats
+**Line 1:** model, effort indicator (●/◑/◔), context window bar, project (branch), git diff stats
+
+**Line 2:** 5h and 7d usage windows, each with:
+
+- **Sparkline graph** (▁▂▃▄▅▆▇█) — past slots colored green (under pace) or red (over pace), future slots show the pace reference line in dark gray
+- **Used %** — current usage in the window
+- **Pace delta** — **⇣15%** green = 15% under pace, headroom; **⇡15%** red = 15% over pace, slow down
+- **Countdown** — time until the window resets
 
 ## Install
 
-Requires `jq`.
-
-**Plugin (recommended):**
-
-Inside Claude Code:
-
-```
-/plugin marketplace add Astro-Han/claude-pace
-/plugin install claude-pace
-/reload-plugins
-/claude-pace:setup
-```
-
-**npx:**
+Requires `jq` (`brew install jq` on macOS, `apt install jq` on Linux).
 
 ```bash
-npx claude-pace
-```
-
-Restart Claude Code. Done.
-
-**Manual:**
-
-```bash
-curl -o ~/.claude/statusline.sh \
-  https://raw.githubusercontent.com/Astro-Han/claude-pace/main/claude-pace.sh
+curl -fsSL -o ~/.claude/statusline.sh \
+  https://raw.githubusercontent.com/mairas/claude-pace-sparklines/main/claude-pace-sparklines.sh
 chmod +x ~/.claude/statusline.sh
 ```
 
@@ -59,15 +40,7 @@ Add to `~/.claude/settings.json`:
 
 Restart Claude Code. Done.
 
-To remove: delete the `statusLine` block from `~/.claude/settings.json`.
-
-## Upgrade
-
-- **Plugin:** `/claude-pace:setup` (pulls the latest from GitHub)
-- **npx:** `npx claude-pace@latest`
-- **Manual:** Re-run the `curl` command above.
-
-Release notifications: Watch this repo → Custom → Releases.
+To upgrade, re-run the `curl` command. To remove, delete the `statusLine` block from `~/.claude/settings.json`.
 
 ## How It Compares
 
@@ -82,7 +55,7 @@ Release notifications: Watch this repo → Custom → Releases.
 
 Execution and memory measured on Apple Silicon, 300 runs, same stdin JSON. Rust/Go values are estimates.
 
-Need themes, powerline aesthetics, or TUI config? Try [ccstatusline](https://github.com/sirmalloc/ccstatusline). The entire source of claude-pace is [one file](claude-pace.sh). Read it.
+Need themes, powerline aesthetics, or TUI config? Try [ccstatusline](https://github.com/sirmalloc/ccstatusline). The entire source of claude-pace-sparklines is [one file](claude-pace-sparklines.sh). Read it.
 
 ## Under the Hood
 
@@ -99,9 +72,9 @@ On Claude Code >= 2.1.80, usage data comes directly from stdin. No network calls
 
 Cache files live in a private per-user directory (`$XDG_RUNTIME_DIR/claude-pace` or `~/.cache/claude-pace`, mode 700). All cache reads are validated before use. No files are ever written to shared `/tmp`.
 
-## Also by the Author
+## Attribution
 
-[**diffpane**](https://github.com/Astro-Han/diffpane) - Real-time TUI diff viewer for AI coding agents. See what Claude Code changes as it happens.
+Forked from [Astro-Han/claude-pace](https://github.com/Astro-Han/claude-pace). This fork adds sparkline usage graphs and is maintained independently.
 
 ## License
 

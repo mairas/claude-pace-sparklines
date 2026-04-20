@@ -1,16 +1,16 @@
 {
-  "name": "claude-pace",
-  "description": "A statusline for Claude Code that just works. Single file of Bash + jq -- no Node.js, no npm, nothing to break. Tracks quota pace too.",
+  "name": "claude-pace-sparklines",
+  "description": "A statusline for Claude Code with pace tracking and sparkline usage graphs. Single file of Bash + jq -- no Node.js, no npm, nothing to break.",
   "version": "0.7.2",
   "author": {
-    "name": "yuhan",
-    "url": "https://github.com/Astro-Han"
+    "name": "Matti Airas",
+    "url": "https://github.com/mairas"
   },
   "commands": [
     "./commands/setup.md"
   ],
-  "homepage": "https://github.com/Astro-Han/claude-pace",
-  "repository": "https://github.com/Astro-Han/claude-pace",
+  "homepage": "https://github.com/mairas/claude-pace-sparklines",
+  "repository": "https://github.com/mairas/claude-pace-sparklines",
   "license": "MIT",
   "keywords": [
     "statusline",
