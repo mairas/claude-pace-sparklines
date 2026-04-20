@@ -22,7 +22,7 @@ There is no build step, linter, or package manager for the main project.
 
 ## Architecture
 
-### `claude-pace-sparklines.sh` — Single-file architecture (~380 lines)
+### `claude-pace-sparklines.sh` — Single-file architecture (~350 lines)
 
 The script reads JSON from stdin (provided by Claude Code's statusline system) and outputs a two-line statusline string with ANSI color codes.
 
@@ -38,11 +38,11 @@ The script reads JSON from stdin (provided by Claude Code's statusline system) a
 
 - **Performance target:** ~10ms execution (3% of refresh cycle)
 - **Atomic file operations** for cache/history to prevent partial reads under concurrency
-- **Background async API fetches** so network latency never blocks the statusline
+- **No network calls** — usage data comes from stdin, no API dependencies
 - **Reset detection:** 5% drop threshold detects when usage windows reset mid-cycle
 - **Forward-fill with monotonicity enforcement** preserves the cumulative property in sparkline visualization
 
-### `test.sh` — Test suite (~210 lines, 17 test cases)
+### `test.sh` — Test suite (~360 lines, 23 test cases)
 
 Tests use helper functions: `strip_ansi()` removes color codes, `assert_line()` does regex matching on output lines, `assert_aligned()` verifies pipe column alignment. Tests cover model names, context formatting, git stats, countdown formatting, pace deltas, sparklines, and window reset detection.
 

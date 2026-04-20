@@ -170,7 +170,7 @@ assert_line "no arrow at d=0" 2 '5h [^:]+50% [0-9]'
 # ── Test 12: Sparkline with mock history ──
 echo "Test 12: sparkline rendering"
 # Create mock history: 5 data points over 2.5 hours, usage rising from 5% to 50%
-_HIST="$HOME/.claude/claude-pace-history.tsv"
+_HIST="$HOME/.claude/claude-pace-sparklines-history.tsv"
 _HIST_BAK=""
 [ -f "$_HIST" ] && { _HIST_BAK=$(mktemp /tmp/claude-sl-hist-bak-XXXXXX); cp "$_HIST" "$_HIST_BAK"; }
 # Window resets in 150 min (2.5h elapsed of 5h), so wstart = NOW - 150*60
@@ -264,24 +264,24 @@ else
   rm -f "$_HIST"
 fi
 
-# ── Test 12: Branch cache must not inject newlines into output ──
-echo "Test 12: branch cache newline injection"
+# ── Test 18: Branch cache must not inject newlines into output ──
+echo "Test 18: branch cache newline injection"
 INJECT_HOME="$TEST_TMP/inject-home"
 INJECT_RUNTIME="$TEST_TMP/inject-runtime"
 INJECT_DIR="$TEST_TMP/non-git-escape"
-INJECT_CACHE_ROOT="$INJECT_RUNTIME/claude-pace"
+INJECT_CACHE_ROOT="$INJECT_RUNTIME/claude-pace-sparklines"
 mkdir -p "$INJECT_HOME" "$INJECT_RUNTIME" "$INJECT_DIR" "$INJECT_CACHE_ROOT"
 GC="$INJECT_CACHE_ROOT/claude-sl-git-${INJECT_DIR//[^a-zA-Z0-9]/_}"
 printf 'feature\\nPWN|0|0|0\n' >"$GC"
 OUTPUT=$(run_with_env "$INJECT_HOME" "$INJECT_RUNTIME" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$INJECT_DIR"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":'"$((NOW + 12000))"'},"seven_day":{"used_percentage":15,"resets_at":'"$((NOW + 500000))"'}}}')
 assert_line_count "branch cache keeps output to two lines" 2
 
-# ── Test 13: Git cache arithmetic payload must not execute ──
-echo "Test 13: git cache arithmetic injection"
+# ── Test 19: Git cache arithmetic payload must not execute ──
+echo "Test 19: git cache arithmetic injection"
 INJECT_GIT_HOME="$TEST_TMP/non-git-arith-home"
 INJECT_GIT_RUNTIME="$TEST_TMP/non-git-arith-runtime"
 INJECT_GIT_DIR="$TEST_TMP/non-git-arith"
-INJECT_GIT_CACHE_ROOT="$INJECT_GIT_RUNTIME/claude-pace"
+INJECT_GIT_CACHE_ROOT="$INJECT_GIT_RUNTIME/claude-pace-sparklines"
 mkdir -p "$INJECT_GIT_HOME" "$INJECT_GIT_RUNTIME" "$INJECT_GIT_DIR" "$INJECT_GIT_CACHE_ROOT"
 GC="$INJECT_GIT_CACHE_ROOT/claude-sl-git-${INJECT_GIT_DIR//[^a-zA-Z0-9]/_}"
 GIT_MARKER="$TEST_TMP/git-arith-marker"
@@ -290,19 +290,19 @@ printf 'main|%s|0|0\n' "$FC_PAYLOAD" >"$GC"
 run_side_effect_with_env "$INJECT_GIT_HOME" "$INJECT_GIT_RUNTIME" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$INJECT_GIT_DIR"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":'"$((NOW + 12000))"'},"seven_day":{"used_percentage":15,"resets_at":'"$((NOW + 500000))"'}}}'
 assert_missing_path "git cache arithmetic payload is not executed" "$GIT_MARKER"
 
-# ── Test 14: Usage cache arithmetic payload must not execute ──
-echo "Test 14: usage cache arithmetic injection"
+# ── Test 20: Usage cache arithmetic payload must not execute ──
+echo "Test 20: usage cache arithmetic injection"
 USAGE_HOME="$TEST_TMP/usage-arith-home"
 USAGE_RUNTIME="$TEST_TMP/usage-arith-runtime"
-USAGE_CACHE_ROOT="$USAGE_RUNTIME/claude-pace"
+USAGE_CACHE_ROOT="$USAGE_RUNTIME/claude-pace-sparklines"
 mkdir -p "$USAGE_HOME" "$USAGE_RUNTIME" "$USAGE_CACHE_ROOT"
 XU_PAYLOAD="a[\$(printf usage >$USAGE_ARITH_MARKER)]"
 printf '%s\n' "--|--|1|$XU_PAYLOAD|0||" >"$USAGE_CACHE_ROOT/claude-sl-usage"
 run_side_effect_with_env "$USAGE_HOME" "$USAGE_RUNTIME" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000}}'
 assert_missing_path "usage cache arithmetic payload is not executed" "$USAGE_ARITH_MARKER"
 
-# ── Test 15: Shared /tmp git cache must be ignored when using a private cache root ──
-echo "Test 15: private cache root ignores shared tmp git cache"
+# ── Test 21: Shared /tmp git cache must be ignored when using a private cache root ──
+echo "Test 21: private cache root ignores shared tmp git cache"
 PRIVATE_HOME="$TEST_TMP/private-home"
 PRIVATE_RUNTIME="$TEST_TMP/private-runtime"
 PRIVATE_REPO="$TEST_TMP/private-repo"
@@ -320,8 +320,8 @@ else
   echo "    actual line: $(printf '%s\n' "$OUTPUT" | sed -n '1p')"
 fi
 
-# ── Test 16: Cache format must preserve branch names that contain | ──
-echo "Test 16: branch names containing pipes survive cache round-trip"
+# ── Test 22: Cache format must preserve branch names that contain | ──
+echo "Test 22: branch names containing pipes survive cache round-trip"
 PIPE_HOME="$TEST_TMP/pipe-home"
 PIPE_RUNTIME="$TEST_TMP/pipe-runtime"
 PIPE_REPO="$TEST_TMP/pipe-repo"
@@ -338,12 +338,12 @@ else
   echo "    actual line: $(printf '%s\n' "$OUTPUT" | sed -n '1p')"
 fi
 
-# ── Test 17: Git fallback write must not follow symlinks ──
-echo "Test 17: git fallback does not clobber symlink targets"
+# ── Test 23: Git fallback write must not follow symlinks ──
+echo "Test 23: git fallback does not clobber symlink targets"
 SYMLINK_HOME="$TEST_TMP/symlink-home"
 SYMLINK_RUNTIME="$TEST_TMP/symlink-runtime"
 SYMLINK_PROJECT="$TEST_TMP/symlink-project"
-SYMLINK_CACHE_ROOT="$SYMLINK_RUNTIME/claude-pace"
+SYMLINK_CACHE_ROOT="$SYMLINK_RUNTIME/claude-pace-sparklines"
 SYMLINK_TARGET="$TEST_TMP/git-fallback-target"
 mkdir -p "$SYMLINK_HOME" "$SYMLINK_RUNTIME" "$SYMLINK_PROJECT" "$SYMLINK_CACHE_ROOT"
 GC="$SYMLINK_CACHE_ROOT/claude-sl-git-${SYMLINK_PROJECT//[^a-zA-Z0-9]/_}"

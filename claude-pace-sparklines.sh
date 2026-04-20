@@ -104,15 +104,12 @@ done
 _stale() { [ ! -f "$1" ] || [ $((NOW - $(stat -f%m "$1" 2>/dev/null || stat -c%Y "$1" 2>/dev/null || echo 0))) -gt "$2" ]; }
 
 # ── Parse stdin + settings in one jq call ──
-# Fields: MODEL DIR PCT CTX COST EFF HAS_RL U5 U7 R5 R7
-HAS_RL=0
-IFS=$'\t' read -r MODEL DIR PCT CTX COST EFF HAS_RL U5 U7 R5 R7 < <(
+# Fields: MODEL DIR PCT CTX EFF U5 U7 R5 R7
+IFS=$'\t' read -r MODEL DIR PCT CTX EFF U5 U7 R5 R7 < <(
   jq -r --slurpfile cfg <(cat ~/.claude/settings.json 2>/dev/null || echo '{}') \
     '[(.model.display_name//"?"),(.workspace.project_dir//"."),
     (.context_window.used_percentage//0|floor),(.context_window.context_window_size//0),
-    (.cost.total_cost_usd//0),
     ($cfg[0].effortLevel//"default"),
-    (if .rate_limits then 1 else 0 end),
     (.rate_limits.five_hour.used_percentage//null|if type=="number" then floor else "--" end),
     (.rate_limits.seven_day.used_percentage//null|if type=="number" then floor else "--" end),
     (.rate_limits.five_hour.resets_at//0),
@@ -200,6 +197,8 @@ RM7=$(_minutes_until "$R7")
 
 # ── History Logging (append-only TSV, 10-min interval) ──
 HIST="$HOME/.claude/claude-pace-sparklines-history.tsv"
+# Migrate old history file from pre-rename versions
+[ ! -f "$HIST" ] && [ -f "$HOME/.claude/claude-pace-history.tsv" ] && mv "$HOME/.claude/claude-pace-history.tsv" "$HIST"
 if [[ "$U5" =~ ^[0-9]+$ ]] && [[ "$U7" =~ ^[0-9]+$ ]] && _stale "$HIST" 600; then
   printf '%s\t%s\t%s\n' "$NOW" "$U5" "$U7" >>"$HIST"
   # Rotate: keep most recent ~1100 lines when file grows past 1500
