@@ -50,3 +50,7 @@ Tests use helper functions: `strip_ansi()` removes color codes, `assert_line()` 
 
 - `.claude-plugin/plugin.json` — Plugin metadata and version
 - `commands/setup.md` — Interactive setup guide executed during plugin installation
+
+### Documented solutions
+
+`docs/solutions/` — documented solutions to past problems (bugs, test failures, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when debugging or refactoring in documented areas.
