@@ -29,9 +29,7 @@ The script reads JSON from stdin (provided by Claude Code's statusline system) a
 **Data flow:**
 1. **Parse input** — Single `jq` call extracts model, context, usage %, countdown times, rate limits
 2. **Git info** — Branch name + diff stats, cached per-repo for 5 seconds (atomic file writes)
-3. **Usage data** — Two sources:
-   - Preferred: `rate_limits` from stdin (CC ≥ 2.1.80, no network needed)
-   - Fallback: Anthropic Usage API with background async fetch, 300s cache TTL
+3. **Usage data** — `rate_limits` from stdin (real-time, no network needed)
 4. **History** — Appends to `~/.claude/claude-pace-sparklines-history.tsv` at 10-min intervals, auto-rotates at 1500 lines
 5. **Sparklines** — 8 slots for 5h window, 7 slots for 7d window. Past slots colored by pace (green=under, red=over), future slots show dark gray pace reference line
 6. **Output assembly** — Two lines with symmetric pipe alignment (measures plain text width excluding ANSI codes)
